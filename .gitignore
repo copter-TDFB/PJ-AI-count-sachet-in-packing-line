@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+build/
+dist/
+dist_release/
+*.spec
+update_tmp/
+launcher.log
+*_openvino_model/
+*.zip
+app_backup/
