@@ -47,7 +47,7 @@ def _get_base_dir() -> Path:
     return Path(__file__).parent
 
 
-DEFAULT_MODEL = str(_get_base_dir() / 'ai_3g_v5.pt')
+DEFAULT_MODEL = str(_get_base_dir() / 'ai_3g_v7.pt')
 
 
 # ── dataset helpers ──────────────────────────────────────────────────────────

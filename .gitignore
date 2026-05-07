@@ -9,3 +9,4 @@ launcher.log
 *_openvino_model/
 *.zip
 app_backup/
+crop_config.json

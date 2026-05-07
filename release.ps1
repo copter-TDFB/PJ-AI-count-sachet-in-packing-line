@@ -1,5 +1,5 @@
-# Build → zip → upload เป็น GitHub Release
-# Prereq: ติดตั้ง gh CLI แล้ว (https://cli.github.com) และ gh auth login เรียบร้อย
+# Build -> zip -> upload as GitHub Release
+# Prereq: gh CLI installed and logged in (gh auth login)
 # Usage:  .\release.ps1 1.0.1 "fix barcode bug"
 
 param(
@@ -10,20 +10,27 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+# Refresh PATH from registry so gh CLI is found even in stale sessions
+$env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
+
 # 1) build
 & .\build.ps1 $Version
 
-# 2) zip ตัว app/ (launcher จะดึงจากตรงนี้)
+# 2) zip the app/ folder (launcher fetches this)
+# Use bsdtar (built-in on Windows 10+) - much faster than Compress-Archive for large folders
 $ZipName = "odoo-counter-$Version.zip"
-Write-Host "→ zipping → $ZipName"
+Write-Host "==> zipping -> $ZipName (via tar)"
 Remove-Item $ZipName -ErrorAction SilentlyContinue
-Compress-Archive -Path "dist_release/app" -DestinationPath $ZipName -Force
+tar -caf $ZipName -C dist_release app
+if ($LASTEXITCODE -ne 0) { throw "tar zip failed" }
+$ZipMB = [math]::Round((Get-Item $ZipName).Length/1MB, 1)
+Write-Host "    zip size: $ZipMB MB"
 
-# 3) สร้าง release ผ่าน gh
-Write-Host "→ uploading release v$Version"
+# 3) create GitHub release via gh CLI
+Write-Host "==> uploading release v$Version"
 gh release create "v$Version" $ZipName --title "v$Version" --notes "$Notes"
 if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
 
 Write-Host ""
-Write-Host "✓ Released v$Version" -ForegroundColor Green
-Write-Host "  ลูกค้าที่มี launcher.exe จะ auto-update รอบหน้าที่เปิดโปรแกรม"
+Write-Host "OK - Released v$Version" -ForegroundColor Green
+Write-Host "    Clients with launcher.exe will auto-update on next launch."

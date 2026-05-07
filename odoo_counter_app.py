@@ -1,5 +1,6 @@
 import sys
 import ctypes
+import json
 import time
 import threading
 import queue
@@ -14,10 +15,10 @@ from pynput import keyboard as pynput_kb
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QGroupBox, QLineEdit, QFileDialog, QFrame,
-    QScrollArea
+    QScrollArea, QDialog, QSlider
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRect
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
 
 ODOO_URL      = 'https://tdfb-30042026-test.odoo.com'
 ODOO_DB       = 'tdfb-30042026-test'
@@ -29,7 +30,48 @@ def _get_base_dir() -> Path:
         return Path(sys.executable).parent
     return Path(__file__).parent
 
-DEFAULT_MODEL = str(_get_base_dir() / 'ai_3g_v5.pt')
+DEFAULT_MODEL = str(_get_base_dir() / 'ai_3g_v7.pt')
+
+
+# ── Settings config (per-machine: crop rect + conf threshold) ─
+def _crop_config_path() -> Path:
+    return _get_base_dir() / 'crop_config.json'
+
+DEFAULT_CONF = 0.5
+
+def _load_config_dict() -> dict:
+    p = _crop_config_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+def _load_crop() -> tuple:
+    d = _load_config_dict()
+    try:
+        x = max(0.0, min(1.0, float(d.get('x', 0.0))))
+        y = max(0.0, min(1.0, float(d.get('y', 0.0))))
+        w = max(0.05, min(1.0 - x, float(d.get('w', 1.0))))
+        h = max(0.05, min(1.0 - y, float(d.get('h', 1.0))))
+        return (x, y, w, h)
+    except Exception:
+        return (0.0, 0.0, 1.0, 1.0)
+
+def _load_conf() -> float:
+    d = _load_config_dict()
+    try:
+        return max(0.05, min(0.95, float(d.get('conf', DEFAULT_CONF))))
+    except Exception:
+        return DEFAULT_CONF
+
+def _save_settings(rect: tuple, conf: float):
+    x, y, w, h = rect
+    _crop_config_path().write_text(
+        json.dumps({'x': x, 'y': y, 'w': w, 'h': h, 'conf': conf}, indent=2),
+        encoding='utf-8'
+    )
 
 
 # ── Connection cache ──────────────────────────────────────────
@@ -220,13 +262,6 @@ _OBB_COLORS = {
     'genmaicha': ( 50, 205, 154),
     'houjicha':  ( 43,  90, 139),
 }
-_OBB_LABELS = {
-    'excellent': 'Excellent Rich',
-    'medium':    'Medium Rich',
-    'classic':   'Classic Rich',
-    'genmaicha': 'Genmaicha Powder',
-    'houjicha':  'Houjicha Rich',
-}
 _KEYWORD_ODOO_NAME = {
     'excellent': 'Excellent Rich 95% 3.1g',
     'medium':    'Medium Rich 95% 3.1g',
@@ -235,36 +270,39 @@ _KEYWORD_ODOO_NAME = {
     'genmaicha': 'Genmaicha Powder 3 g',
 }
 
-def _draw_obb(frame: np.ndarray, res, names: dict) -> np.ndarray:
-    out    = frame.copy()
+_FULL_CROP = (0.0, 0.0, 1.0, 1.0)
+
+def _draw_obb(frame: np.ndarray, res, names: dict, crop_rect: tuple = _FULL_CROP):
+    """Crop frame to counting zone, draw OBBs of detections inside, return (cropped_annotated, counts).
+
+    Model already ran on the full frame; we filter by center-inside-crop and
+    return the cropped region so the display zooms into the counting zone.
+    """
     counts: dict[str, int] = {}
+    H, W = frame.shape[:2]
+    cx, cy, cw, ch = crop_rect
+    rx, ry = int(cx * W), int(cy * H)
+    rw, rh = max(1, int(cw * W)), max(1, int(ch * H))
+
+    out = frame[ry:ry + rh, rx:rx + rw].copy()
 
     if res.obb is not None and len(res.obb) > 0:
-        pts_all = res.obb.xyxyxyxy.cpu().numpy().astype(int)
+        pts_all = res.obb.xyxyxyxy.cpu().numpy()
+        centers = pts_all.mean(axis=1)
         for i, cls_idx in enumerate(res.obb.cls.tolist()):
-            name  = names[int(cls_idx)].lower()
-            color = next((c for kw, c in _OBB_COLORS.items() if kw in name), (200, 200, 200))
-            cv2.polylines(out, [pts_all[i]], isClosed=True, color=color, thickness=3)
-            for kw in _OBB_COLORS:
-                if kw in name:
-                    counts[kw] = counts.get(kw, 0) + 1
-                    break
+            x_c, y_c = centers[i]
+            if not (rx <= x_c < rx + rw and ry <= y_c < ry + rh):
+                continue
+            pts_translated = pts_all[i].copy()
+            pts_translated[:, 0] -= rx
+            pts_translated[:, 1] -= ry
+            pts_int = pts_translated.astype(int)
+            name  = names[int(cls_idx)]
+            color = next((c for kw, c in _OBB_COLORS.items() if kw in name.lower()), (200, 200, 200))
+            cv2.polylines(out, [pts_int], isClosed=True, color=color, thickness=3)
+            counts[name] = counts.get(name, 0) + 1
 
-    font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 1.5, 2
-    pad, line_h = 12, 54
-    (ref_w, _), _ = cv2.getTextSize('Genmaicha: 00', font, scale, thick)
-    x0 = out.shape[1] - ref_w - pad * 2
-
-    for idx, (kw, base_color) in enumerate(_OBB_COLORS.items()):
-        cnt   = counts.get(kw, 0)
-        color = base_color if cnt > 0 else tuple(int(c * 0.35) for c in base_color)
-        label = f"{_OBB_LABELS[kw]}: {cnt}"
-        y     = pad + (idx + 1) * line_h
-        (tw, th), _ = cv2.getTextSize(label, font, scale, thick)
-        cv2.rectangle(out, (x0 - 8, y - th - 8), (x0 + tw + 8, y + 8), (20, 20, 20), -1)
-        cv2.putText(out, label, (x0, y), font, scale, color, thick, cv2.LINE_AA)
-
-    return out
+    return out, counts
 
 
 # ── Worker: กล้อง + YOLO inference ─────────────────────────
@@ -274,20 +312,32 @@ class CameraWorker(QThread):
     model_ready        = pyqtSignal(str)
     image_infer_done   = pyqtSignal(QImage, object)
     image_infer_error  = pyqtSignal(str)
+    raw_frame_ready    = pyqtSignal(QImage)  # ส่งภาพ pre-inference สำหรับหน้า crop settings
 
-    def __init__(self, model_path: str, camera_id: int = 0, conf: float = 0.5):
+    def __init__(self, model_path: str, camera_id: int = 0, conf: float | None = None):
         super().__init__()
         self.model_path = model_path
         self.camera_id  = camera_id
-        self.conf       = conf
+        self.conf       = conf if conf is not None else _load_conf()
         self._running   = True
         self._img_req   = queue.Queue(maxsize=1)
+        self._crop_rect: tuple = _load_crop()
+        self._emit_raw: bool   = False
 
     def infer_image(self, image_path: str):
         try:
             self._img_req.put_nowait(image_path)
         except queue.Full:
             pass
+
+    def set_crop_rect(self, rect: tuple):
+        self._crop_rect = rect
+
+    def set_conf(self, conf: float):
+        self.conf = max(0.05, min(0.95, float(conf)))
+
+    def set_emit_raw(self, enabled: bool):
+        self._emit_raw = enabled
 
     def stop(self):
         self._running = False
@@ -342,12 +392,8 @@ class CameraWorker(QThread):
                         self.image_infer_error.emit(f"เปิดไฟล์ไม่ได้: {Path(img_path).name}")
                     else:
                         res = model(img_frame, conf=self.conf, verbose=False)[0]
-                        cc  = {}
-                        if res.obb is not None and len(res.obb) > 0:
-                            for cls_idx in res.obb.cls.tolist():
-                                name     = model.names[int(cls_idx)]
-                                cc[name] = cc.get(name, 0) + 1
-                        annotated = _draw_obb(img_frame, res, model.names)
+                        # ภาพอัพโหลดไม่ใช้ crop (ผู้ใช้เลือกรูปเอง — นับทั้งภาพ)
+                        annotated, cc = _draw_obb(img_frame, res, model.names)
                         rgb       = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
                         h, w, ch  = rgb.shape
                         qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
@@ -375,17 +421,20 @@ class CameraWorker(QThread):
                     # 2) downscale to 1080p only if larger
                     if frame.shape[0] > 1080:
                         frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_AREA)
+
+                    # emit raw frame (post-preprocess) สำหรับหน้า crop settings
+                    if self._emit_raw:
+                        rgb_raw = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        rh, rw, rch = rgb_raw.shape
+                        rqimg = QImage(rgb_raw.data, rw, rh, rch * rw, QImage.Format.Format_RGB888).copy()
+                        self.raw_frame_ready.emit(rqimg)
+
                     t0    = time.perf_counter()
                     res   = model(frame, conf=self.conf, verbose=False)[0]
                     ms    = (time.perf_counter() - t0) * 1000
-                    cc    = {}
-                    if res.obb is not None and len(res.obb) > 0:
-                        for cls_idx in res.obb.cls.tolist():
-                            name = model.names[int(cls_idx)]
-                            cc[name] = cc.get(name, 0) + 1
+                    annotated, cc = _draw_obb(frame, res, model.names, self._crop_rect)
                     fps = 1000 / ms if ms > 0 else 0
                     print(f"[Detect] {ms:.1f} ms  |  {fps:.1f} FPS  |  {cc}", flush=True)
-                    annotated = _draw_obb(frame, res, model.names)
                     cv2.putText(
                         annotated,
                         f"FPS: {fps:.1f}  |  Latency: {ms:.1f} ms",
@@ -439,6 +488,220 @@ class CameraWorker(QThread):
         cap.release()
 
 
+# ── Crop settings UI ─────────────────────────────────────
+class CropPreviewWidget(QWidget):
+    """ลากเมาส์เพื่อกำหนดสี่เหลี่ยมพื้นที่นับ ค่า rect เก็บเป็น ratio 0..1"""
+    rectChanged = pyqtSignal(tuple)
+
+    def __init__(self):
+        super().__init__()
+        self._qimg: QImage | None = None
+        self._rect: tuple = _FULL_CROP
+        self._dragging = False
+        self._drag_start: tuple | None = None
+        self.setMinimumSize(720, 405)
+        self.setStyleSheet("background:#0e0e14; border-radius:6px;")
+
+    def set_frame(self, qimg: QImage):
+        self._qimg = qimg
+        self.update()
+
+    def set_rect(self, rect: tuple):
+        self._rect = rect
+        self.update()
+
+    def get_rect(self) -> tuple:
+        return self._rect
+
+    def _img_geom(self):
+        if self._qimg is None or self._qimg.isNull():
+            return (0, 0, self.width(), self.height())
+        iw, ih = self._qimg.width(), self._qimg.height()
+        if iw <= 0 or ih <= 0:
+            return (0, 0, self.width(), self.height())
+        scale = min(self.width() / iw, self.height() / ih)
+        dw, dh = int(iw * scale), int(ih * scale)
+        dx, dy = (self.width() - dw) // 2, (self.height() - dh) // 2
+        return (dx, dy, dw, dh)
+
+    def _to_norm(self, px: float, py: float):
+        ix, iy, iw, ih = self._img_geom()
+        if iw <= 0 or ih <= 0:
+            return None
+        nx = max(0.0, min(1.0, (px - ix) / iw))
+        ny = max(0.0, min(1.0, (py - iy) / ih))
+        return (nx, ny)
+
+    def mousePressEvent(self, e):
+        n = self._to_norm(e.position().x(), e.position().y())
+        if n is None:
+            return
+        self._dragging   = True
+        self._drag_start = n
+        self._rect = (n[0], n[1], 0.0, 0.0)
+        self.update()
+
+    def mouseMoveEvent(self, e):
+        if not self._dragging or self._drag_start is None:
+            return
+        n = self._to_norm(e.position().x(), e.position().y())
+        if n is None:
+            return
+        x0, y0 = self._drag_start
+        x1, y1 = n
+        rx, ry = min(x0, x1), min(y0, y1)
+        rw, rh = abs(x1 - x0), abs(y1 - y0)
+        self._rect = (rx, ry, rw, rh)
+        self.update()
+
+    def mouseReleaseEvent(self, e):
+        if not self._dragging:
+            return
+        self._dragging = False
+        x, y, w, h = self._rect
+        if w < 0.05 or h < 0.05:
+            # เล็กเกินไป — ถือว่ายังไม่เลือก
+            self._rect = _FULL_CROP
+        else:
+            x = max(0.0, min(1.0 - w, x))
+            y = max(0.0, min(1.0 - h, y))
+            self._rect = (x, y, w, h)
+        self.rectChanged.emit(self._rect)
+        self.update()
+
+    def paintEvent(self, e):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(14, 14, 20))
+        if self._qimg is None or self._qimg.isNull():
+            painter.setPen(QColor(150, 150, 150))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "รอ frame จากกล้อง...")
+            return
+        ix, iy, iw, ih = self._img_geom()
+        painter.drawImage(QRect(ix, iy, iw, ih), self._qimg)
+        x, y, w, h = self._rect
+        rx = ix + int(x * iw); ry = iy + int(y * ih)
+        rw = int(w * iw);      rh = int(h * ih)
+        # มืดส่วนนอกกรอบ
+        overlay = QColor(0, 0, 0, 130)
+        painter.fillRect(ix, iy, iw, ry - iy, overlay)
+        painter.fillRect(ix, ry + rh, iw, iy + ih - (ry + rh), overlay)
+        painter.fillRect(ix, ry, rx - ix, rh, overlay)
+        painter.fillRect(rx + rw, ry, ix + iw - (rx + rw), rh, overlay)
+        # เส้นขอบกรอบสีเหลือง
+        pen = QPen(QColor(0, 220, 220))
+        pen.setWidth(2)
+        painter.setPen(pen)
+        painter.drawRect(rx, ry, rw, rh)
+
+
+class CropSettingsDialog(QDialog):
+    def __init__(self, current_rect: tuple, current_conf: float, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("ตั้งค่ากล้อง / Detection")
+        self.resize(960, 720)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        info = QLabel(
+            "ลากเมาส์บนภาพเพื่อกำหนดพื้นที่ \"counting zone\" — "
+            "เฉพาะของที่อยู่ในกรอบจะถูกนับ  •  ภาพเข้า model ยังคง 1080p เต็มเหมือนเดิม"
+        )
+        info.setStyleSheet("color:#aaa; font-size:13px;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self.preview = CropPreviewWidget()
+        self.preview.set_rect(current_rect)
+        self.preview.rectChanged.connect(self._on_rect_changed)
+        layout.addWidget(self.preview, 1)
+
+        self.lbl_info = QLabel(self._rect_text(current_rect))
+        self.lbl_info.setStyleSheet("color:#ccc; font-size:12px; padding:4px;")
+        self.lbl_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.lbl_info)
+
+        # ── Confidence threshold ──────────────────────────
+        conf_box = QGroupBox("Confidence Threshold (เกณฑ์ความมั่นใจของ detect)")
+        conf_box.setStyleSheet(
+            "QGroupBox { color:#aaa; font-size:12px; border:1px solid #333;"
+            "border-radius:6px; margin-top:8px; padding-top:8px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left:10px; padding:0 6px; }"
+        )
+        cl = QHBoxLayout(conf_box)
+        cl.setContentsMargins(12, 10, 12, 10)
+        cl.setSpacing(10)
+
+        self._conf = max(0.05, min(0.95, float(current_conf)))
+        self.conf_slider = QSlider(Qt.Orientation.Horizontal)
+        self.conf_slider.setRange(5, 95)  # 0.05–0.95
+        self.conf_slider.setValue(int(round(self._conf * 100)))
+        self.conf_slider.setSingleStep(1)
+        self.conf_slider.setTickInterval(10)
+        self.conf_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.conf_slider.valueChanged.connect(self._on_conf_changed)
+
+        self.lbl_conf = QLabel(self._conf_text(self._conf))
+        self.lbl_conf.setStyleSheet("color:#90CAF9; font-size:14px; font-weight:bold; min-width:130px;")
+        self.lbl_conf.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        cl.addWidget(QLabel("ต่ำ (จับเยอะ)"), 0)
+        cl.addWidget(self.conf_slider, 1)
+        cl.addWidget(QLabel("สูง (เข้มงวด)"), 0)
+        cl.addWidget(self.lbl_conf, 0)
+        layout.addWidget(conf_box)
+
+        btn_row    = QHBoxLayout()
+        btn_reset  = QPushButton("รีเซ็ตเต็มจอ")
+        btn_cancel = QPushButton("ยกเลิก")
+        btn_save   = QPushButton("บันทึก")
+        for b in (btn_reset, btn_cancel, btn_save):
+            b.setFixedHeight(38)
+            b.setMinimumWidth(120)
+        btn_save.setStyleSheet("background:#2E7D32; color:white; font-weight:bold; font-size:13px; border-radius:6px;")
+        btn_cancel.setStyleSheet("background:#37474F; color:white; font-size:13px; border-radius:6px;")
+        btn_reset.setStyleSheet("background:#37474F; color:white; font-size:13px; border-radius:6px;")
+        btn_reset.clicked.connect(self._reset)
+        btn_cancel.clicked.connect(self.reject)
+        btn_save.clicked.connect(self.accept)
+        btn_row.addWidget(btn_reset)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_cancel)
+        btn_row.addWidget(btn_save)
+        layout.addLayout(btn_row)
+
+    @staticmethod
+    def _rect_text(r: tuple) -> str:
+        x, y, w, h = r
+        return f"X: {x*100:.1f}%   Y: {y*100:.1f}%   W: {w*100:.1f}%   H: {h*100:.1f}%"
+
+    @staticmethod
+    def _conf_text(c: float) -> str:
+        return f"conf = {c:.2f}"
+
+    def _on_rect_changed(self, rect: tuple):
+        self.lbl_info.setText(self._rect_text(rect))
+
+    def _on_conf_changed(self, val: int):
+        self._conf = val / 100.0
+        self.lbl_conf.setText(self._conf_text(self._conf))
+
+    def _reset(self):
+        self.preview.set_rect(_FULL_CROP)
+        self.lbl_info.setText(self._rect_text(_FULL_CROP))
+
+    def update_frame(self, qimg: QImage):
+        self.preview.set_frame(qimg)
+
+    def get_rect(self) -> tuple:
+        return self.preview.get_rect()
+
+    def get_conf(self) -> float:
+        return self._conf
+
+
 # ── หน้าต่างนับ (เด้งขึ้นเมื่อเจอ Excellent/Houjicha 3g) ────
 class CounterPanel(QWidget):
     closed                 = pyqtSignal()
@@ -455,7 +718,7 @@ class CounterPanel(QWidget):
         self._last_class_counts  = {}
         self._log_posted         = False
         self._stable_since       = None
-        self._last_stable_counts: dict = {}
+        self._last_stable_counts: tuple = ()
         self._last_sound_status: str | None = None
         self._image_mode         = False
         self._save_workers: set  = set()
@@ -490,6 +753,16 @@ class CounterPanel(QWidget):
         self.lbl_toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_toast.setWordWrap(True)
         self.lbl_toast.hide()
+
+        self.lbl_alert = QLabel(self.camera_label)
+        self.lbl_alert.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_alert.setWordWrap(True)
+        self.lbl_alert.setStyleSheet(
+            "background: rgba(183, 28, 28, 230); color: white;"
+            "font-size: 16px; font-weight: bold;"
+            "border: 2px solid #FF5252; border-radius: 8px; padding: 8px 14px;"
+        )
+        self.lbl_alert.hide()
 
         # ── RIGHT: Info panel ────────────────────────────
         right_panel = QWidget()
@@ -612,6 +885,7 @@ class CounterPanel(QWidget):
         any_over     = False
         any_counted  = False
         current_counts: dict = {}
+        alert_lines: list[str] = []
 
         for pr in self._product_rows:
             cnt    = self._get_count(class_counts, pr['keyword'])
@@ -626,9 +900,11 @@ class CounterPanel(QWidget):
                 color, stat = '#F44336', f'เกิน {cnt - demand}'
                 all_exact = False
                 any_over  = True
+                alert_lines.append(f"{pr['product_name']}: เกิน {cnt - demand}")
             else:
                 color, stat = '#FF9800', f'ขาด {demand - cnt}'
                 all_exact = False
+                alert_lines.append(f"{pr['product_name']}: ขาด {demand - cnt}")
 
             pr['lbl_count'].setText(str(cnt))
             pr['lbl_count'].setStyleSheet(
@@ -640,10 +916,42 @@ class CounterPanel(QWidget):
                 f"border-radius:6px; padding:6px 12px;"
             )
 
+        # ตรวจสอบสินค้าที่ detect ได้แต่ไม่อยู่ใน order — ถือเป็น "เกิน" เช่นกัน
+        wrong: list[str] = []
+        if self._product_rows:
+            order_kws = {pr['keyword'] for pr in self._product_rows}
+            wrong = [
+                name for name, cnt in class_counts.items()
+                if cnt > 0 and not any(kw in name.lower() for kw in order_kws)
+            ]
+            if wrong:
+                all_exact   = False
+                any_over    = True
+                any_counted = True
+                odoo_names = []
+                for n in wrong:
+                    kw = next((k for k in _KEYWORD_ODOO_NAME if k in n.lower()), None)
+                    odoo_names.append(_KEYWORD_ODOO_NAME[kw] if kw else n)
+                self.lbl_wrong.setText(f"⚠ พบสินค้าที่ไม่ใช่ใน Order: {', '.join(odoo_names)}")
+                self.lbl_wrong.show()
+                alert_lines.extend(f"{n}: ไม่อยู่ใน Order" for n in odoo_names)
+            else:
+                self.lbl_wrong.hide()
+
+        # Persistent red alert: ขึ้นค้างไว้จนกว่าจะตรงตาม order
+        if self._product_rows and any_counted and not all_exact:
+            self._show_alert("✗ ไม่ตรงตาม Order\n" + "\n".join(alert_lines))
+        else:
+            self._hide_alert()
+
+        # รวมจำนวนของนอก order เข้า stability key เพื่อให้ timer reset เมื่อจำนวนเปลี่ยน
+        wrong_counts = {n: class_counts[n] for n in wrong}
+        stability_key = (current_counts, wrong_counts)
+
         # Reset stability timer when counts change; clear last sound to allow re-notify
-        if current_counts != self._last_stable_counts:
+        if stability_key != self._last_stable_counts:
             self._stable_since       = now
-            self._last_stable_counts = current_counts.copy()
+            self._last_stable_counts = stability_key
             self._last_sound_status  = None
 
         if stable_check:
@@ -661,23 +969,6 @@ class CounterPanel(QWidget):
                 self._play_sound(status_key)
             if all_exact and not self._log_posted:
                 self._save_to_odoo()
-
-        # ตรวจสอบสินค้าที่ detect ได้แต่ไม่อยู่ใน order
-        if self._product_rows:
-            order_kws = {pr['keyword'] for pr in self._product_rows}
-            wrong = [
-                name for name, cnt in class_counts.items()
-                if cnt > 0 and not any(kw in name.lower() for kw in order_kws)
-            ]
-            if wrong:
-                odoo_names = []
-                for n in wrong:
-                    kw = next((k for k in _KEYWORD_ODOO_NAME if k in n.lower()), None)
-                    odoo_names.append(_KEYWORD_ODOO_NAME[kw] if kw else n)
-                self.lbl_wrong.setText(f"⚠ พบสินค้าที่ไม่ใช่ใน Order: {', '.join(odoo_names)}")
-                self.lbl_wrong.show()
-            else:
-                self.lbl_wrong.hide()
 
     @staticmethod
     def _play_sound(status: str):
@@ -724,6 +1015,7 @@ class CounterPanel(QWidget):
         self.camera_label.setText("รอ frame จากกล้อง...")
         self.btn_upload.setText("📁 อัพโหลดรูปภาพ")
         self.btn_back_cam.hide()
+        self._hide_alert()
 
     @staticmethod
     def _get_count(class_counts: dict, keyword: str) -> int:
@@ -736,9 +1028,10 @@ class CounterPanel(QWidget):
         self._product_rows       = []
         self._log_posted         = False
         self._stable_since       = None
-        self._last_stable_counts = {}
+        self._last_stable_counts = ()
         self._last_sound_status  = None
         self.lbl_wrong.hide()
+        self._hide_alert()
 
         # Clear existing cards (keep stretch at the end)
         while self._cards_layout.count() > 1:
@@ -867,6 +1160,35 @@ class CounterPanel(QWidget):
     def _hide_toast(self):
         self.lbl_toast.hide()
 
+    def _show_alert(self, msg: str):
+        self.lbl_alert.setText(msg)
+        self._position_alert()
+        self.lbl_alert.show()
+        self.lbl_alert.raise_()
+
+    def _hide_alert(self):
+        self.lbl_alert.hide()
+
+    def _position_alert(self):
+        p = self.camera_label
+        w = min(380, max(240, p.width() - 40))
+        # word-wrap จะ wrap ที่ความกว้างนี้ — ใช้ heightForWidth
+        inner_w = w - 28  # ลบ padding ใน stylesheet
+        text_h = self.lbl_alert.fontMetrics().boundingRect(
+            0, 0, inner_w, 10000,
+            int(Qt.TextFlag.TextWordWrap) | int(Qt.AlignmentFlag.AlignCenter),
+            self.lbl_alert.text()
+        ).height()
+        h = max(50, text_h + 20)
+        x = (p.width() - w) // 2
+        y = 16  # ติดด้านบน เพื่อไม่บัง view สินค้าที่กำลังนับ
+        self.lbl_alert.setGeometry(x, y, w, h)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.lbl_alert.isVisible():
+            self._position_alert()
+
     def hideEvent(self, event):
         super().hideEvent(event)
         self.closed.emit()
@@ -916,14 +1238,51 @@ class MainWindow(QMainWindow):
         self.lbl_bc_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_bc_icon.setStyleSheet("font-size:20px;")
 
+        self.btn_crop_settings = QPushButton("⚙")
+        self.btn_crop_settings.setFixedSize(40, 40)
+        self.btn_crop_settings.setToolTip("ตั้งค่า Crop กล้อง (counting zone)")
+        self.btn_crop_settings.setStyleSheet(
+            "font-size:18px; background:#37474F; color:white; border-radius:6px;"
+        )
+        self.btn_crop_settings.clicked.connect(self._open_crop_settings)
+
         bc_lay.addWidget(self.barcode_input)
         bc_lay.addWidget(self.lbl_bc_icon)
+        bc_lay.addWidget(self.btn_crop_settings)
         root.addWidget(bc_box)
 
         self.lbl_status = QLabel("กำลังโหลด model และกล้อง...")
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_status.setStyleSheet("color:#888; font-size:12px;")
         root.addWidget(self.lbl_status)
+
+    def _open_crop_settings(self):
+        if not self._camera_worker:
+            return
+        cur_rect = self._camera_worker._crop_rect
+        cur_conf = self._camera_worker.conf
+        dlg = CropSettingsDialog(cur_rect, cur_conf, parent=self)
+        self._camera_worker.set_emit_raw(True)
+        self._camera_worker.raw_frame_ready.connect(dlg.update_frame)
+        try:
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                new_rect = dlg.get_rect()
+                new_conf = dlg.get_conf()
+                self._camera_worker.set_crop_rect(new_rect)
+                self._camera_worker.set_conf(new_conf)
+                try:
+                    _save_settings(new_rect, new_conf)
+                    self.lbl_status.setText(
+                        f"บันทึก: crop {new_rect[2]*100:.0f}%×{new_rect[3]*100:.0f}%, conf {new_conf:.2f}"
+                    )
+                except Exception as e:
+                    self.lbl_status.setText(f"บันทึก settings ล้มเหลว: {e}")
+        finally:
+            try:
+                self._camera_worker.raw_frame_ready.disconnect(dlg.update_frame)
+            except Exception:
+                pass
+            self._camera_worker.set_emit_raw(False)
 
     def _start_camera(self):
         self._camera_worker = CameraWorker(DEFAULT_MODEL)
