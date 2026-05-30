@@ -2,6 +2,7 @@ import sys
 import ctypes
 import json
 import time
+import asyncio
 import threading
 import queue
 import itertools
@@ -9,6 +10,7 @@ _snd_counter = itertools.count()
 import xmlrpc.client
 import cv2
 import numpy as np
+import websockets
 from pathlib import Path
 from ultralytics import YOLO
 from pynput import keyboard as pynput_kb
@@ -17,7 +19,7 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QGroupBox, QLineEdit, QFileDialog, QFrame,
     QScrollArea, QDialog, QSlider
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRect
+from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
 
 ODOO_URL      = 'https://tdfb.odoo.com'
@@ -100,6 +102,7 @@ class BarcodeWorker(QThread):
     data_ready     = pyqtSignal(dict)
     not_found      = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    origin_ready   = pyqtSignal(str)  # fire ทันทีที่เจอ picking ใน Odoo (มี/ไม่มีสินค้า 3g ก็ส่ง)
 
     def __init__(self, barcode: str):
         super().__init__()
@@ -116,13 +119,17 @@ class BarcodeWorker(QThread):
                 [[['x_studio_tracking_no', '=', self.barcode],
                   ['picking_type_id.name', 'ilike', 'Pack'],
                   ['state', '=', 'assigned']]],
-                {'fields': ['name', 'x_studio_tracking_no', 'partner_id', 'state'], 'limit': 1}
+                {'fields': ['name', 'x_studio_tracking_no', 'partner_id', 'state', 'origin'], 'limit': 1}
             )
             if not pickings:
                 self.not_found.emit(self.barcode)
                 return
 
             picking = pickings[0]
+            origin = (picking.get('origin') or '').strip() if isinstance(picking.get('origin'), str) else ''
+            if origin:
+                self.origin_ready.emit(origin)
+
             moves = models.execute_kw(
                 ODOO_DB, uid, ODOO_PASSWORD,
                 'stock.move', 'search_read',
@@ -1458,6 +1465,79 @@ class CounterPanel(QWidget):
         self.closed.emit()
 
 
+# ── WebSocket bridge: broadcast barcodes to browser (Tampermonkey) ──
+class BarcodeBridgeWorker(QObject):
+    """WebSocket server ส่ง barcode ที่แอปสแกนได้ไปยัง Tampermonkey ใน browser
+    (TikTok / Shopee / Odoo web). รันใน daemon thread แยก asyncio loop —
+    Qt thread เรียก broadcast() ผ่าน run_coroutine_threadsafe.
+    """
+
+    PORT = 9999
+
+    status_changed = pyqtSignal(str, str)  # state ∈ {"ok","fail","starting"}, message
+
+    def __init__(self):
+        super().__init__()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._clients: set = set()
+        self._thread: threading.Thread | None = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_until_complete(self._serve())
+        except OSError as e:
+            self.status_changed.emit('fail', f"port {self.PORT} ถูกใช้แล้ว")
+            print(f"[Bridge] bind fail: {e}")
+        except Exception as e:
+            self.status_changed.emit('fail', str(e)[:70])
+            print(f"[Bridge] error: {e}")
+
+    async def _serve(self):
+        async with websockets.serve(self._handler, "localhost", self.PORT):
+            self.status_changed.emit('ok', "พร้อม (0 tabs)")
+            print(f"[Bridge] listening ws://localhost:{self.PORT}")
+            await asyncio.Future()  # run until loop.stop()
+
+    async def _handler(self, websocket):
+        self._clients.add(websocket)
+        self._emit_client_count()
+        try:
+            await websocket.wait_closed()
+        finally:
+            self._clients.discard(websocket)
+            self._emit_client_count()
+
+    def _emit_client_count(self):
+        n = len(self._clients)
+        self.status_changed.emit('ok', f"พร้อม ({n} tabs)")
+
+    def broadcast(self, barcode: str):
+        """Call from Qt thread — schedules broadcast in asyncio loop."""
+        if not self._loop or not self._loop.is_running():
+            return
+        asyncio.run_coroutine_threadsafe(self._broadcast_async(barcode), self._loop)
+
+    async def _broadcast_async(self, barcode: str):
+        if not self._clients:
+            print(f"[Bridge] no clients — barcode dropped: {barcode!r}")
+            return
+        await asyncio.gather(
+            *[c.send(barcode) for c in self._clients],
+            return_exceptions=True,
+        )
+        print(f"[Bridge] sent {barcode!r} → {len(self._clients)} client(s)")
+
+    def stop(self):
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+
+
 # ── หน้าต่าง Barcode (เล็ก ใช้ตลอด) ────────────────────────
 class MainWindow(QMainWindow):
 
@@ -1482,6 +1562,10 @@ class MainWindow(QMainWindow):
         self._odoo_status_worker = OdooStatusWorker()
         self._odoo_status_worker.status_changed.connect(self._on_odoo_status)
         self._odoo_status_worker.start()
+
+        self._bridge = BarcodeBridgeWorker()
+        self._bridge.status_changed.connect(self._on_bridge_status)
+        self._bridge.start()
 
         threading.Thread(target=self._preconnect_odoo, daemon=True).start()
 
@@ -1528,6 +1612,10 @@ class MainWindow(QMainWindow):
         self.lbl_odoo_status = QLabel("●  Odoo: กำลังตรวจสอบ...")
         self.lbl_odoo_status.setStyleSheet("color:#FFB300; font-size:11px;")
         bc_outer.addWidget(self.lbl_odoo_status)
+
+        self.lbl_bridge_status = QLabel("●  Bridge: กำลังเริ่ม...")
+        self.lbl_bridge_status.setStyleSheet("color:#FFB300; font-size:11px;")
+        bc_outer.addWidget(self.lbl_bridge_status)
 
         root.addWidget(bc_box)
 
@@ -1621,6 +1709,7 @@ class MainWindow(QMainWindow):
         w.data_ready.connect(self._on_barcode_data)
         w.not_found.connect(self._on_not_found)
         w.error_occurred.connect(self._on_error)
+        w.origin_ready.connect(self._bridge.broadcast)
         w.finished.connect(lambda: self._workers.discard(w))
         self._workers.add(w)
         w.start()
@@ -1658,11 +1747,17 @@ class MainWindow(QMainWindow):
         self.lbl_odoo_status.setText(f"●  Odoo: {msg}")
         self.lbl_odoo_status.setStyleSheet(f"color:{color}; font-size:11px;")
 
+    def _on_bridge_status(self, state: str, msg: str):
+        color = {'ok': '#4CAF50', 'fail': '#EF5350', 'starting': '#FFB300'}.get(state, '#888')
+        self.lbl_bridge_status.setText(f"●  Bridge: {msg}")
+        self.lbl_bridge_status.setStyleSheet(f"color:{color}; font-size:11px;")
+
     def closeEvent(self, event):
         self._barcode_listener.stop_listener()
         self._barcode_listener.wait()
         self._odoo_status_worker.stop()
         self._odoo_status_worker.wait()
+        self._bridge.stop()
         if self._camera_worker:
             self._camera_worker.stop()
             self._camera_worker.wait()

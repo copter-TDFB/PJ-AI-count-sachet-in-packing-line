@@ -18,6 +18,7 @@ python -m PyInstaller --noconsole --onedir --name odoo_counter `
     --collect-all PyQt6 `
     --collect-all cv2 `
     --collect-all openvino `
+    --collect-all websockets `
     --exclude-module PySide6 `
     --exclude-module PyQt5 `
     --exclude-module shiboken6 `

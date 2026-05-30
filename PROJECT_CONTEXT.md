@@ -134,6 +134,7 @@ Python packages ที่ source import:
 - `ultralytics`
 - `openvino`
 - `pynput`
+- `websockets` (bridge ส่ง barcode ไป Tampermonkey ใน browser)
 - `PyInstaller`
 - `truststore`
 - `certifi`
@@ -306,6 +307,7 @@ Step 1: หา picking
   - `x_studio_tracking_no`
   - `partner_id`
   - `state`
+  - `origin` (source document ref — ส่งต่อไป Tampermonkey ผ่าน bridge)
 - limit 1
 
 ถ้าไม่เจอ:
@@ -422,6 +424,36 @@ Counter popup logic:
 
 - เมื่อเจอ picking แล้ว จะปิด barcode listener ชั่วคราว (`set_active(False)`) และ enable camera inference
 - เมื่อปิด counter popup จะเปิด barcode listener กลับ (`set_active(True)`) และ disable camera inference
+
+## Barcode Bridge Logic
+
+แอปรัน WebSocket server ในตัวเองเพื่อ broadcast barcode ที่สแกนได้ไปยัง Tampermonkey script ใน browser (TikTok / Shopee / Odoo web) — เลิกต้องเปิดโปรเซสที่ 2
+
+Class: `BarcodeBridgeWorker`
+
+- port: `9999` (hardcoded)
+- รันใน daemon thread แยก + asyncio event loop ของตัวเอง
+- Qt thread เรียก `broadcast(barcode)` ซึ่ง schedule coroutine ผ่าน `asyncio.run_coroutine_threadsafe`
+- broadcast **เฉพาะ `picking.origin`** ทันทีที่เจอใบ Pack ใน Odoo (ผ่าน signal `BarcodeWorker.origin_ready`) — ไม่สนว่าใบนั้นมีสินค้า 3g ที่รองรับหรือไม่
+- ไม่ส่งตัวเลข barcode ที่ scanner ยิงมาดิบ ๆ
+- skip broadcast ถ้า `origin` ว่าง / หา picking ไม่เจอใน Odoo / Odoo error
+- Tampermonkey รับ origin เป็น raw string → `detectPlatform()` route ไป tab ที่ตรงกับ format (เช่น TikTok order ID → TikTok tab) ผ่าน cross-tab relay เดิม
+- ไม่ดักคีย์เอง — re-use `GlobalBarcodeListener` ที่มีอยู่
+- signal `status_changed(state, message)` → `lbl_bridge_status` ใต้ `lbl_odoo_status`:
+  - `ok` + `"พร้อม (N tabs)"` (เขียว) — bind สำเร็จ + จำนวน browser tab ที่ connect
+  - `fail` + `"port 9999 ถูกใช้แล้ว"` (แดง) — bind fail (เช่นเปิดโปรเซสเก่าค้าง)
+- ปิดผ่าน `closeEvent` → `loop.call_soon_threadsafe(loop.stop)` (daemon thread จะตายเองตอน process exit)
+
+Failure behavior:
+
+- bind port fail → emit `fail` ไป UI, log stdout, แอปยังทำงาน counter ได้ปกติ (fail-soft)
+- ไม่มี client connect → broadcast log `"no clients — barcode dropped"` แต่ไม่ error
+
+Tampermonkey ฝั่ง browser:
+
+- connect `ws://localhost:9999`
+- รับ message เป็น barcode string ดิบ (ไม่มี JSON envelope)
+- จัดการ filter / dispatch เอง (เช่น TikTok 18 หลัก vs Shopee alphanumeric)
 
 ## Detection Classes And Mapping
 
@@ -1155,6 +1187,7 @@ Commit history:
 - `OdooSaveWorker` - post Odoo note (fire-and-forget จาก hideEvent)
 - `_PingTransport` - XML-RPC timeout transport
 - `OdooStatusWorker` - periodic Odoo ping + `check_now()` event-based wakeup
+- `BarcodeBridgeWorker` - WebSocket server (port 9999) broadcast barcode ไป Tampermonkey ใน browser
 - `GlobalBarcodeListener` - global scanner listener (VK-based, IME bypass)
 - `CameraWorker` - model/camera/inference/warmup/snapshot
 - `CropPreviewWidget` - crop drawing widget
