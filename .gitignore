@@ -10,3 +10,6 @@ launcher.log
 *.zip
 app_backup/
 crop_config.json
+*.pt
+snapshots/
+สูตร upload เข้า githup.txt

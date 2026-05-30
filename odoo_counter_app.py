@@ -20,8 +20,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
 
-ODOO_URL      = 'https://tdfb-30042026-test.odoo.com'
-ODOO_DB       = 'tdfb-30042026-test'
+ODOO_URL      = 'https://tdfb.odoo.com'
+ODOO_DB       = 'tdfb'
 ODOO_USER     = 'operation.engineer@tdfb.co'
 ODOO_PASSWORD = 'KBT123'
 
@@ -30,14 +30,14 @@ def _get_base_dir() -> Path:
         return Path(sys.executable).parent
     return Path(__file__).parent
 
-DEFAULT_MODEL = str(_get_base_dir() / 'ai_3g_v7.pt')
+DEFAULT_MODEL = str(_get_base_dir() / 'ai_3g_v12.pt')
 
 
 # ── Settings config (per-machine: crop rect + conf threshold) ─
 def _crop_config_path() -> Path:
     return _get_base_dir() / 'crop_config.json'
 
-DEFAULT_CONF = 0.5
+DEFAULT_CONF = 0.7
 
 def _load_config_dict() -> dict:
     p = _crop_config_path()
@@ -157,7 +157,60 @@ class BarcodeWorker(QThread):
                 else:
                     self.not_found.emit(f"{picking['name']} — ไม่มี moves ที่ยังไม่เสร็จในใบนี้เลย")
                 return
-            self.data_ready.emit({'picking': picking, 'moves': moves})
+
+            # ดึงเลข lot + วันหมดอายุ จาก stock.move.line — แยกตาม product
+            move_ids = [m['id'] for m in moves]
+            lots_by_product: dict = {}
+            try:
+                move_lines = models.execute_kw(
+                    ODOO_DB, uid, ODOO_PASSWORD,
+                    'stock.move.line', 'search_read',
+                    [[['move_id', 'in', move_ids]]],
+                    {'fields': ['product_id', 'lot_id', 'lot_name']}
+                )
+
+                # รวบรวม lot_id ทั้งหมดเพื่อดึง expiration_date ทีเดียว
+                lot_ids = list({ml['lot_id'][0] for ml in move_lines if ml.get('lot_id')})
+                lot_info: dict = {}
+                if lot_ids:
+                    # Odoo 15+ ใช้ stock.lot, รุ่นเก่าใช้ stock.production.lot
+                    for model_name in ('stock.lot', 'stock.production.lot'):
+                        try:
+                            lot_recs = models.execute_kw(
+                                ODOO_DB, uid, ODOO_PASSWORD,
+                                model_name, 'read',
+                                [lot_ids],
+                                {'fields': ['name', 'expiration_date']}
+                            )
+                            for lr in lot_recs:
+                                lot_info[lr['id']] = {
+                                    'name': lr.get('name') or '',
+                                    'expiration_date': lr.get('expiration_date') or '',
+                                }
+                            break
+                        except Exception:
+                            continue
+
+                for ml in move_lines:
+                    pid = ml['product_id'][0] if ml.get('product_id') else None
+                    if pid is None:
+                        continue
+                    if ml.get('lot_id'):
+                        info = lot_info.get(ml['lot_id'][0], {})
+                        name = (info.get('name') or ml['lot_id'][1] or '').strip()
+                        exp  = info.get('expiration_date') or ''
+                    else:
+                        name = (ml.get('lot_name') or '').strip()
+                        exp  = ''
+                    if not name:
+                        continue
+                    bucket = lots_by_product.setdefault(pid, [])
+                    if not any(b['name'] == name for b in bucket):
+                        bucket.append({'name': name, 'expiration_date': exp})
+            except Exception:
+                pass  # ไม่มี lot ก็ไม่เป็นไร ให้ดำเนินการต่อ
+
+            self.data_ready.emit({'picking': picking, 'moves': moves, 'lots_by_product': lots_by_product})
 
         except Exception as e:
             OdooConn.reset()
@@ -196,6 +249,59 @@ class OdooSaveWorker(QThread):
             self.save_error.emit(str(e))
 
 
+# ── Worker: ตรวจสถานะการเชื่อมต่อ Odoo เป็นช่วงๆ ─────────────
+class _PingTransport(xmlrpc.client.SafeTransport):
+    """SafeTransport ที่มี connection timeout — กัน UI ค้างเวลา network ขาด"""
+    def __init__(self, timeout: float = 5.0):
+        super().__init__()
+        self._timeout = timeout
+
+    def make_connection(self, host):
+        conn = super().make_connection(host)
+        conn.timeout = self._timeout
+        return conn
+
+
+class OdooStatusWorker(QThread):
+    status_changed = pyqtSignal(str, str)  # state: 'ok'|'fail'|'checking', message
+
+    _INTERVAL_S   = 30
+    _PING_TIMEOUT = 5
+
+    def __init__(self):
+        super().__init__()
+        self._running = True
+        self._wake    = threading.Event()
+
+    def stop(self):
+        self._running = False
+        self._wake.set()
+
+    def check_now(self):
+        self._wake.set()
+
+    def run(self):
+        while self._running:
+            self.status_changed.emit('checking', 'กำลังตรวจสอบ...')
+            try:
+                proxy = xmlrpc.client.ServerProxy(
+                    f"{ODOO_URL}/xmlrpc/2/common",
+                    transport=_PingTransport(timeout=self._PING_TIMEOUT),
+                )
+                ver = proxy.version()
+                sv  = ver.get('server_version', '?') if isinstance(ver, dict) else '?'
+                self.status_changed.emit('ok', f"เชื่อมต่อแล้ว ({sv})")
+            except Exception as e:
+                OdooConn.reset()
+                err = str(e)
+                if len(err) > 70:
+                    err = err[:67] + '...'
+                self.status_changed.emit('fail', f"เชื่อมต่อไม่ได้ — {err}")
+
+            self._wake.wait(self._INTERVAL_S)
+            self._wake.clear()
+
+
 # ── Global keyboard listener (รับ barcode แม้ app ถูก minimize) ──
 class GlobalBarcodeListener(QThread):
     barcode_ready  = pyqtSignal(str)
@@ -222,6 +328,16 @@ class GlobalBarcodeListener(QThread):
         if val:
             self._buffer = []
 
+    # VK → ASCII: bypass IME ทุกภาษา
+    _VK_MAP: dict = {
+        **{vk: chr(vk) for vk in range(ord('A'), ord('Z') + 1)},   # 65-90 → A-Z
+        **{vk: str(vk - 48) for vk in range(48, 58)},              # 48-57 → 0-9
+        **{vk: str(vk - 96) for vk in range(96, 106)},             # 96-105 → numpad 0-9
+        189: '-', 109: '-',   # minus / numpad minus
+        191: '/', 111: '/',   # slash / numpad slash
+        190: '.', 110: '.',   # period / numpad period
+    }
+
     def _on_press(self, key):
         if not self._active or self._suppress:
             return
@@ -229,21 +345,24 @@ class GlobalBarcodeListener(QThread):
         if now - self._last_time > self._TIMEOUT:
             self._buffer = []
         self._last_time = now
-        try:
-            char = key.char
-            if char:
-                self._buffer.append(char)
-                self.buffer_updated.emit(''.join(self._buffer))
-        except AttributeError:
-            if key == pynput_kb.Key.enter:
-                barcode = ''.join(self._buffer)
-                self._buffer = []
-                self.buffer_updated.emit('')
-                if len(barcode) >= 4:
-                    self.barcode_ready.emit(barcode)
-            elif key == pynput_kb.Key.backspace and self._buffer:
-                self._buffer.pop()
-                self.buffer_updated.emit(''.join(self._buffer))
+
+        if key == pynput_kb.Key.enter:
+            barcode = ''.join(self._buffer)
+            self._buffer = []
+            self.buffer_updated.emit('')
+            if len(barcode) >= 4:
+                self.barcode_ready.emit(barcode)
+            return
+        if key == pynput_kb.Key.backspace and self._buffer:
+            self._buffer.pop()
+            self.buffer_updated.emit(''.join(self._buffer))
+            return
+
+        vk = getattr(key, 'vk', None)
+        char = self._VK_MAP.get(vk) if vk is not None else None
+        if char:
+            self._buffer.append(char)
+            self.buffer_updated.emit(''.join(self._buffer))
 
     def run(self):
         with pynput_kb.Listener(on_press=self._on_press) as listener:
@@ -323,6 +442,8 @@ class CameraWorker(QThread):
         self._img_req   = queue.Queue(maxsize=1)
         self._crop_rect: tuple = _load_crop()
         self._emit_raw: bool   = False
+        self._inference_enabled: bool = False
+        self._last_raw_frame = None
 
     def infer_image(self, image_path: str):
         try:
@@ -338,6 +459,21 @@ class CameraWorker(QThread):
 
     def set_emit_raw(self, enabled: bool):
         self._emit_raw = enabled
+
+    def set_inference_enabled(self, enabled: bool):
+        self._inference_enabled = enabled
+
+    def save_snapshot(self, folder: Path, filename: str):
+        frame = self._last_raw_frame
+        if frame is None:
+            return
+        def _write():
+            try:
+                folder.mkdir(exist_ok=True)
+                cv2.imwrite(str(folder / filename), frame)
+            except Exception as e:
+                print(f"[Snapshot] บันทึกไม่สำเร็จ: {e}", flush=True)
+        threading.Thread(target=_write, daemon=True).start()
 
     def stop(self):
         self._running = False
@@ -368,10 +504,18 @@ class CameraWorker(QThread):
             model_path_used = str(pt_path)
 
         loaded_name = Path(model_path_used).name
-        self.status_message.emit(f"โหลด {loaded_name} สำเร็จ — พร้อมนับ")
+        self.status_message.emit(f"โหลด {loaded_name} สำเร็จ — กำลัง warmup...")
+        dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+        for _ in range(5):
+            model(dummy, verbose=False)
+        self.status_message.emit(f"โหลด {loaded_name} สำเร็จ — รอสแกน Barcode")
         self.model_ready.emit(loaded_name)
 
-        cap = cv2.VideoCapture(self.camera_id)
+        # MSMF (Media Foundation) ใช้ Windows Frame Server — แชร์กล้องกับ OBS/แอปอื่นได้
+        cap = cv2.VideoCapture(self.camera_id, cv2.CAP_MSMF)
+        if not cap.isOpened():
+            print("[Camera] MSMF เปิดไม่ได้ — fallback เป็น default backend", flush=True)
+            cap = cv2.VideoCapture(self.camera_id)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -407,8 +551,9 @@ class CameraWorker(QThread):
                 try:
                     frame = q.get(timeout=0.05)
                     h, w = frame.shape[:2]
-                    # 1) crop center → 16:9
-                    target = 16 / 9
+                    # 1) crop center ตาม orientation: landscape→16:9, portrait→9:16
+                    is_landscape = w >= h
+                    target = (16 / 9) if is_landscape else (9 / 16)
                     current = w / h
                     if current > target:
                         new_w = int(round(h * target))
@@ -418,9 +563,12 @@ class CameraWorker(QThread):
                         new_h = int(round(w / target))
                         y     = (h - new_h) // 2
                         frame = frame[y:y + new_h, :]
-                    # 2) downscale to 1080p only if larger
-                    if frame.shape[0] > 1080:
+                    # 2) downscale ให้ด้านยาวไม่เกิน 1920, ด้านสั้นไม่เกิน 1080
+                    fh, fw = frame.shape[:2]
+                    if is_landscape and fh > 1080:
                         frame = cv2.resize(frame, (1920, 1080), interpolation=cv2.INTER_AREA)
+                    elif not is_landscape and fw > 1080:
+                        frame = cv2.resize(frame, (1080, 1920), interpolation=cv2.INTER_AREA)
 
                     # emit raw frame (post-preprocess) สำหรับหน้า crop settings
                     if self._emit_raw:
@@ -429,6 +577,10 @@ class CameraWorker(QThread):
                         rqimg = QImage(rgb_raw.data, rw, rh, rch * rw, QImage.Format.Format_RGB888).copy()
                         self.raw_frame_ready.emit(rqimg)
 
+                    if not self._inference_enabled:
+                        continue
+
+                    self._last_raw_frame = frame
                     t0    = time.perf_counter()
                     res   = model(frame, conf=self.conf, verbose=False)[0]
                     ms    = (time.perf_counter() - t0) * 1000
@@ -461,10 +613,12 @@ class CameraWorker(QThread):
                 continue
             frame = cv2.flip(frame, 1)
 
-            try:
-                q.put_nowait(frame)
-            except queue.Full:
-                pass
+            # ถ้าไม่มี consumer (inference ปิด + ไม่มี crop preview) ข้าม push เพื่อประหยัด CPU
+            if self._inference_enabled or self._emit_raw:
+                try:
+                    q.put_nowait(frame)
+                except queue.Full:
+                    pass
 
             with lock:
                 is_new       = state['new']
@@ -706,6 +860,7 @@ class CropSettingsDialog(QDialog):
 class CounterPanel(QWidget):
     closed                 = pyqtSignal()
     image_infer_requested  = pyqtSignal(str)
+    snapshot_requested     = pyqtSignal(str)  # picking_name
 
     def __init__(self):
         super().__init__()
@@ -722,6 +877,7 @@ class CounterPanel(QWidget):
         self._last_sound_status: str | None = None
         self._image_mode         = False
         self._save_workers: set  = set()
+        self._pending_product_counts: list | None = None
 
         self._toast_timer = QTimer(self)
         self._toast_timer.setSingleShot(True)
@@ -733,6 +889,13 @@ class CounterPanel(QWidget):
         self._hide_timer.setInterval(1500)
         self._hide_timer.timeout.connect(self.hide)
 
+        # MSN-style nudge: เขย่าหน้าต่างเมื่อนับผิด
+        self._shake_timer = QTimer(self)
+        self._shake_timer.timeout.connect(self._shake_step)
+        self._shake_origin = None
+        self._shake_offsets: list = []
+        self._shake_idx = 0
+
         self._build_ui()
 
     def _build_ui(self):
@@ -743,7 +906,7 @@ class CounterPanel(QWidget):
         # ── LEFT: Camera ─────────────────────────────────
         self.camera_label = QLabel("กำลังโหลดกล้อง...")
         self.camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.camera_label.setMinimumSize(900, 720)
+        self.camera_label.setMinimumSize(560, 380)
         self.camera_label.setStyleSheet(
             "background:#1a1a1a; color:#666; font-size:15px; border-radius:8px;"
         )
@@ -791,16 +954,16 @@ class CounterPanel(QWidget):
         cb_layout.setContentsMargins(8, 12, 8, 8)
         cb_layout.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._cards_scroll = QScrollArea()
+        self._cards_scroll.setWidgetResizable(True)
+        self._cards_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_inner = QWidget()
         self._cards_layout = QVBoxLayout(scroll_inner)
         self._cards_layout.setContentsMargins(0, 0, 0, 0)
         self._cards_layout.setSpacing(8)
-        self._cards_layout.addStretch(1)
-        scroll.setWidget(scroll_inner)
-        cb_layout.addWidget(scroll)
+        self._cards_scroll.setWidget(scroll_inner)
+        cb_layout.addWidget(self._cards_scroll)
         right.addWidget(cards_box, 1)
 
         self.lbl_wrong = QLabel()
@@ -814,30 +977,35 @@ class CounterPanel(QWidget):
         self.lbl_wrong.hide()
         right.addWidget(self.lbl_wrong)
 
-        self.btn_upload = QPushButton("📁 อัพโหลดรูปภาพ")
-        self.btn_upload.setFixedHeight(40)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+
+        self.btn_upload = QPushButton("📁 อัพโหลด")
+        self.btn_upload.setFixedHeight(42)
         self.btn_upload.setStyleSheet(
             "font-size:13px; background:#1565C0; color:white; border-radius:6px;"
         )
         self.btn_upload.clicked.connect(self._open_image)
-        right.addWidget(self.btn_upload)
+        btn_row.addWidget(self.btn_upload, 1)
 
         self.btn_back_cam = QPushButton("📷 กลับกล้อง")
-        self.btn_back_cam.setFixedHeight(40)
+        self.btn_back_cam.setFixedHeight(42)
         self.btn_back_cam.setStyleSheet(
             "font-size:13px; background:#2E7D32; color:white; border-radius:6px;"
         )
         self.btn_back_cam.clicked.connect(self._back_to_camera)
         self.btn_back_cam.hide()
-        right.addWidget(self.btn_back_cam)
+        btn_row.addWidget(self.btn_back_cam, 1)
 
         btn_close = QPushButton("ปิด — สแกนใบใหม่")
-        btn_close.setFixedHeight(45)
+        btn_close.setFixedHeight(42)
         btn_close.setStyleSheet(
-            "font-size:14px; background:#37474F; color:white; border-radius:6px;"
+            "font-size:13px; background:#37474F; color:white; border-radius:6px;"
         )
         btn_close.clicked.connect(self.hide)
-        right.addWidget(btn_close)
+        btn_row.addWidget(btn_close, 1)
+
+        right.addLayout(btn_row)
 
         root.addWidget(right_panel, 0)
 
@@ -853,8 +1021,9 @@ class CounterPanel(QWidget):
         state_th = {'assigned': 'พร้อม', 'done': 'เสร็จแล้ว', 'waiting': 'รอ',
                     'confirmed': 'ยืนยัน', 'cancel': 'ยกเลิก'}.get(p['state'], p['state'])
         self.lbl_picking_info.setText(f"  {p['name']}   |   {contact}   |   {state_th}")
-        self._build_count_table(entry['moves'])
+        self._build_count_table(entry['moves'], entry.get('lots_by_product') or {})
 
+        self._fit_to_screen()
         self.show()
         self.activateWindow()
         self.raise_()
@@ -862,6 +1031,27 @@ class CounterPanel(QWidget):
             ctypes.windll.user32.SetForegroundWindow(int(self.winId()))
         except Exception:
             pass
+
+    def _fit_to_screen(self):
+        """ปรับขนาดให้พอดีกับจอที่ใช้งานอยู่ (เว้น margin จาก taskbar/decoration)"""
+        app = QApplication.instance()
+        screen = app.screenAt(self.pos()) if self.isVisible() else None
+        if screen is None:
+            screen = app.primaryScreen()
+        avail = screen.availableGeometry()
+
+        # ใช้ 90% ของพื้นที่จอ แต่ไม่เกิน design size 1380×800
+        target_w = min(1380, int(avail.width()  * 0.9))
+        target_h = min(800,  int(avail.height() * 0.9))
+        # minimum ให้ UI ยังใช้งานได้
+        target_w = max(900,  target_w)
+        target_h = max(560,  target_h)
+
+        self.resize(target_w, target_h)
+        # center บนจอที่เลือก
+        x = avail.x() + (avail.width()  - target_w) // 2
+        y = avail.y() + (avail.height() - target_h) // 2
+        self.move(x, y)
 
     def update_frame(self, qimg: QImage, class_counts: dict):
         if self._image_mode:
@@ -960,15 +1150,41 @@ class CounterPanel(QWidget):
                 if status_key != self._last_sound_status:
                     self._last_sound_status = status_key
                     self._play_sound(status_key)
+                    if status_key != 'exact':
+                        self._shake_window()
                 if all_exact and not self._log_posted:
-                    self._save_to_odoo()
+                    self._log_posted = True
+                    self._pending_product_counts = [
+                        {
+                            'product_name': pr['product_name'],
+                            'counted':      self._get_count(self._last_class_counts, pr['keyword']),
+                            'demand':       pr['demand'],
+                        }
+                        for pr in self._product_rows
+                    ]
+                    if self._current_entry:
+                        self.snapshot_requested.emit(self._current_entry['picking']['name'])
+                    self._show_toast("✓ ครบตามจำนวนใน order", success=True)
+                    self._hide_timer.start()
         else:
             # Image mode — immediate result
             if any_counted:
                 status_key = 'exact' if all_exact else ('over' if any_over else 'under')
                 self._play_sound(status_key)
+                if status_key != 'exact':
+                    self._shake_window()
             if all_exact and not self._log_posted:
-                self._save_to_odoo()
+                self._log_posted = True
+                self._pending_product_counts = [
+                    {
+                        'product_name': pr['product_name'],
+                        'counted':      self._get_count(self._last_class_counts, pr['keyword']),
+                        'demand':       pr['demand'],
+                    }
+                    for pr in self._product_rows
+                ]
+                self._show_toast("✓ ครบตามจำนวนใน order", success=True)
+                self._hide_timer.start()
 
     @staticmethod
     def _play_sound(status: str):
@@ -984,6 +1200,30 @@ class CounterPanel(QWidget):
             except Exception:
                 pass
         threading.Thread(target=_play, daemon=True).start()
+
+    def _shake_window(self):
+        if self._shake_timer.isActive():
+            self.move(self._shake_origin)
+            self._shake_timer.stop()
+        self._shake_origin = self.pos()
+        # decay amplitude — แรงตอนแรก ค่อยๆ เบาลง คล้าย MSN nudge
+        amps = [16, -14, 12, -10, 13, -11, 9, -7, 8, -6, 5, -4, 3, -2, 0]
+        self._shake_offsets = [
+            (a, (a // 3) if i % 2 == 0 else -(a // 3))
+            for i, a in enumerate(amps)
+        ]
+        self._shake_idx = 0
+        self._shake_timer.start(22)
+
+    def _shake_step(self):
+        if self._shake_idx >= len(self._shake_offsets):
+            self._shake_timer.stop()
+            if self._shake_origin is not None:
+                self.move(self._shake_origin)
+            return
+        dx, dy = self._shake_offsets[self._shake_idx]
+        self.move(self._shake_origin.x() + dx, self._shake_origin.y() + dy)
+        self._shake_idx += 1
 
     def _open_image(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1024,28 +1264,31 @@ class CounterPanel(QWidget):
                 return cnt
         return 0
 
-    def _build_count_table(self, moves):
-        self._product_rows       = []
-        self._log_posted         = False
-        self._stable_since       = None
-        self._last_stable_counts = ()
-        self._last_sound_status  = None
+    def _build_count_table(self, moves, lots_by_product: dict | None = None):
+        self._product_rows            = []
+        self._log_posted              = False
+        self._stable_since            = None
+        self._last_stable_counts      = ()
+        self._last_sound_status       = None
+        self._pending_product_counts  = None
         self.lbl_wrong.hide()
         self._hide_alert()
 
-        # Clear existing cards (keep stretch at the end)
-        while self._cards_layout.count() > 1:
+        while self._cards_layout.count() > 0:
             item = self._cards_layout.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
 
+        lots_by_product = lots_by_product or {}
         for m in moves:
             pname   = self._strip_ref(m['product_id'][1])
             keyword = self._extract_keyword(pname)
             demand  = int(m['product_uom_qty'])
-            card, lbl_count, lbl_status = self._create_product_card(pname, demand)
-            self._cards_layout.insertWidget(self._cards_layout.count() - 1, card)
+            pid     = m['product_id'][0] if m.get('product_id') else None
+            lots    = lots_by_product.get(pid, [])
+            card, lbl_count, lbl_status = self._create_product_card(pname, demand, lots)
+            self._cards_layout.addWidget(card)
             self._product_rows.append({
                 'product_name': pname,
                 'demand':       m['product_uom_qty'],
@@ -1054,9 +1297,11 @@ class CounterPanel(QWidget):
                 'lbl_count':    lbl_count,
                 'lbl_status':   lbl_status,
             })
+        self._cards_layout.addStretch(1)
+        QTimer.singleShot(0, self._fit_cards_to_viewport)
 
     @staticmethod
-    def _create_product_card(name: str, demand: int):
+    def _create_product_card(name: str, demand: int, lots: list | None = None):
         card = QFrame()
         card.setStyleSheet(
             "QFrame { background:#252535; border-radius:8px; }"
@@ -1064,8 +1309,8 @@ class CounterPanel(QWidget):
         card.setMinimumHeight(96)
 
         cl = QVBoxLayout(card)
-        cl.setContentsMargins(12, 8, 12, 10)
-        cl.setSpacing(2)
+        cl.setContentsMargins(10, 6, 10, 6)
+        cl.setSpacing(1)
 
         lbl_name = QLabel(name)
         lbl_name.setStyleSheet("font-size:12px; color:#bbb; font-weight:bold;")
@@ -1076,11 +1321,11 @@ class CounterPanel(QWidget):
         row.setSpacing(6)
 
         lbl_count = QLabel("0")
-        lbl_count.setStyleSheet("font-size:34px; color:#FF9800; font-weight:bold;")
+        lbl_count.setStyleSheet("font-size:26px; color:#FF9800; font-weight:bold;")
         lbl_count.setAlignment(Qt.AlignmentFlag.AlignBottom)
 
         lbl_sep = QLabel(f"/ {demand}")
-        lbl_sep.setStyleSheet("font-size:18px; color:#777;")
+        lbl_sep.setStyleSheet("font-size:15px; color:#777;")
         lbl_sep.setAlignment(Qt.AlignmentFlag.AlignBottom)
 
         row.addWidget(lbl_count)
@@ -1090,13 +1335,35 @@ class CounterPanel(QWidget):
         lbl_status = QLabel(f"ขาด {demand}")
         lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_status.setStyleSheet(
-            "background:#FF9800; color:white; font-size:13px; font-weight:bold;"
-            "border-radius:6px; padding:6px 12px;"
+            "background:#FF9800; color:white; font-size:12px; font-weight:bold;"
+            "border-radius:6px; padding:4px 10px;"
         )
-        lbl_status.setMinimumWidth(95)
+        lbl_status.setMinimumWidth(85)
         row.addWidget(lbl_status)
 
         cl.addLayout(row)
+
+        if lots:
+            lot_names = ', '.join(lot['name'] for lot in lots)
+            exp_dates = []
+            for lot in lots:
+                exp = (lot.get('expiration_date') or '').strip()
+                ymd = exp.split(' ')[0] if exp else ''
+                if ymd and ymd.count('-') == 2:
+                    y, mo, d = ymd.split('-')
+                    exp_dates.append(f"{d}/{mo}/{y}")
+            exp_text = ', '.join(exp_dates) if exp_dates else ''
+        else:
+            lot_names = '-'
+            exp_text = ''
+
+        lbl_lot = QLabel(
+            f"Lot: {lot_names}    EXP: {exp_text}" if exp_text else f"Lot: {lot_names}"
+        )
+        lbl_lot.setStyleSheet("font-size:13px; color:#80CBC4; font-weight:bold;")
+        lbl_lot.setWordWrap(True)
+        cl.addWidget(lbl_lot)
+
         return card, lbl_count, lbl_status
 
     @staticmethod
@@ -1118,30 +1385,15 @@ class CounterPanel(QWidget):
         return pn.split()[0]
 
     def _save_to_odoo(self):
-        if not self._current_entry:
+        if not self._current_entry or not self._pending_product_counts:
             return
-        self._log_posted = True
-        product_counts = [
-            {
-                'product_name': pr['product_name'],
-                'counted':      self._get_count(self._last_class_counts, pr['keyword']),
-                'demand':       pr['demand'],
-            }
-            for pr in self._product_rows
-        ]
+        product_counts = self._pending_product_counts
+        self._pending_product_counts = None
         w = OdooSaveWorker(self._current_entry['picking']['id'], product_counts)
-        w.save_done.connect(self._on_save_done)
-        w.save_error.connect(self._on_save_error)
+        w.save_error.connect(lambda msg: print(f"[Odoo] บันทึกไม่สำเร็จ: {msg}", flush=True))
         w.finished.connect(lambda: self._save_workers.discard(w))
         self._save_workers.add(w)
         w.start()
-
-    def _on_save_done(self):
-        self._show_toast("✓ ครบตามจำนวนใน order\nบันทึก log ในใบ pack สำเร็จ", success=True)
-        self._hide_timer.start()
-
-    def _on_save_error(self, msg: str):
-        self._show_toast(f"✗ บันทึกไม่สำเร็จ\n{msg}", success=False)
 
     def _show_toast(self, msg: str, success: bool = True):
         color = "#4CAF50" if success else "#F44336"
@@ -1181,16 +1433,28 @@ class CounterPanel(QWidget):
         ).height()
         h = max(50, text_h + 20)
         x = (p.width() - w) // 2
-        y = 16  # ติดด้านบน เพื่อไม่บัง view สินค้าที่กำลังนับ
+        y = max(0, (p.height() - h) // 2)
         self.lbl_alert.setGeometry(x, y, w, h)
+
+    def _fit_cards_to_viewport(self):
+        if not self._product_rows:
+            return
+        slots = max(5, len(self._product_rows))
+        vp_h = self._cards_scroll.viewport().height()
+        spacing = self._cards_layout.spacing() * (slots - 1)
+        card_h = max(96, (vp_h - spacing) // slots)
+        for pr in self._product_rows:
+            pr['card'].setFixedHeight(card_h)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.lbl_alert.isVisible():
             self._position_alert()
+        self._fit_cards_to_viewport()
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        self._save_to_odoo()
         self.closed.emit()
 
 
@@ -1214,6 +1478,13 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._start_camera()
+
+        self._odoo_status_worker = OdooStatusWorker()
+        self._odoo_status_worker.status_changed.connect(self._on_odoo_status)
+        self._odoo_status_worker.start()
+
+        threading.Thread(target=self._preconnect_odoo, daemon=True).start()
+
         QApplication.instance().focusChanged.connect(self._on_app_focus_changed)
 
     def _build_ui(self):
@@ -1224,8 +1495,11 @@ class MainWindow(QMainWindow):
         root.setSpacing(6)
 
         bc_box = QGroupBox("Barcode Scanner")
-        bc_lay = QHBoxLayout(bc_box)
-        bc_lay.setContentsMargins(10, 6, 10, 6)
+        bc_outer = QVBoxLayout(bc_box)
+        bc_outer.setContentsMargins(10, 6, 10, 6)
+        bc_outer.setSpacing(4)
+
+        bc_row = QHBoxLayout()
 
         self.barcode_input = QLineEdit()
         self.barcode_input.setPlaceholderText("พิมพ์หรือสแกน Barcode แล้วกด Enter  (ใช้ได้แม้ย่อ app ไว้)")
@@ -1246,9 +1520,15 @@ class MainWindow(QMainWindow):
         )
         self.btn_crop_settings.clicked.connect(self._open_crop_settings)
 
-        bc_lay.addWidget(self.barcode_input)
-        bc_lay.addWidget(self.lbl_bc_icon)
-        bc_lay.addWidget(self.btn_crop_settings)
+        bc_row.addWidget(self.barcode_input)
+        bc_row.addWidget(self.lbl_bc_icon)
+        bc_row.addWidget(self.btn_crop_settings)
+        bc_outer.addLayout(bc_row)
+
+        self.lbl_odoo_status = QLabel("●  Odoo: กำลังตรวจสอบ...")
+        self.lbl_odoo_status.setStyleSheet("color:#FFB300; font-size:11px;")
+        bc_outer.addWidget(self.lbl_odoo_status)
+
         root.addWidget(bc_box)
 
         self.lbl_status = QLabel("กำลังโหลด model และกล้อง...")
@@ -1284,6 +1564,12 @@ class MainWindow(QMainWindow):
                 pass
             self._camera_worker.set_emit_raw(False)
 
+    def _preconnect_odoo(self):
+        try:
+            OdooConn.ensure()
+        except Exception:
+            pass
+
     def _start_camera(self):
         self._camera_worker = CameraWorker(DEFAULT_MODEL)
         self._camera_worker.frame_ready.connect(self._on_frame)
@@ -1292,7 +1578,15 @@ class MainWindow(QMainWindow):
         self._camera_worker.image_infer_done.connect(self._counter_panel._on_image_result)
         self._camera_worker.image_infer_error.connect(self._counter_panel._on_infer_error)
         self._counter_panel.image_infer_requested.connect(self._camera_worker.infer_image)
+        self._counter_panel.snapshot_requested.connect(self._on_snapshot_requested)
         self._camera_worker.start()
+
+    def _on_snapshot_requested(self, picking_name: str):
+        if not self._camera_worker:
+            return
+        safe = "".join(c if c.isalnum() or c in '-_' else '_' for c in picking_name)
+        filename = f"{time.strftime('%Y-%m-%d_%H-%M-%S')}_{safe}.png"
+        self._camera_worker.save_snapshot(_get_base_dir() / 'snapshots', filename)
 
     def _on_model_ready(self, name: str):
         color = "#FF9800" if "openvino" in name.lower() else "#4CAF50"
@@ -1332,6 +1626,8 @@ class MainWindow(QMainWindow):
         w.start()
 
     def _on_counter_closed(self):
+        if self._camera_worker:
+            self._camera_worker.set_inference_enabled(False)
         self._barcode_listener.set_active(True)
         self.lbl_bc_icon.setText("⬜")
         self.lbl_status.setStyleSheet("color:#888; font-size:12px;")
@@ -1342,6 +1638,8 @@ class MainWindow(QMainWindow):
         self.lbl_status.setStyleSheet("color:#4CAF50; font-size:12px; font-weight:bold;")
         self.lbl_status.setText(f"พบ {entry['picking']['name']} — เปิดหน้าต่างนับ")
         self._barcode_listener.set_active(False)
+        if self._camera_worker:
+            self._camera_worker.set_inference_enabled(True)
         self._counter_panel.popup(entry)
 
     def _on_not_found(self, msg: str):
@@ -1353,10 +1651,18 @@ class MainWindow(QMainWindow):
         self.lbl_bc_icon.setText("❌")
         self.lbl_status.setStyleSheet("color:#EF9A9A; font-size:12px;")
         self.lbl_status.setText(f"Error: {msg}")
+        self._odoo_status_worker.check_now()
+
+    def _on_odoo_status(self, state: str, msg: str):
+        color = {'ok': '#4CAF50', 'fail': '#EF5350', 'checking': '#FFB300'}.get(state, '#888')
+        self.lbl_odoo_status.setText(f"●  Odoo: {msg}")
+        self.lbl_odoo_status.setStyleSheet(f"color:{color}; font-size:11px;")
 
     def closeEvent(self, event):
         self._barcode_listener.stop_listener()
         self._barcode_listener.wait()
+        self._odoo_status_worker.stop()
+        self._odoo_status_worker.wait()
         if self._camera_worker:
             self._camera_worker.stop()
             self._camera_worker.wait()

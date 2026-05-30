@@ -6,7 +6,7 @@ Layout เมื่อ build เป็น .exe:
     ├── launcher.exe
     └── app/
          ├── odoo_counter.exe
-         ├── ai_3g_v5.pt
+         ├── ai_3g_v12.pt
          ├── ถูก.mp3 / ผิด.mp3
          └── version.txt
 
@@ -15,6 +15,7 @@ flow: launcher → check GitHub Releases → ถ้ามี version ใหม�
 """
 import json
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -24,6 +25,26 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from tkinter import ttk
+
+
+def _make_ssl_context() -> ssl.SSLContext:
+    # PyInstaller .exe ที่ run บนเครื่องอื่นมักไม่มี CA store ของระบบให้ verify GitHub
+    # ลำดับความน่าเชื่อถือ: truststore (อ่าน Windows cert store, รองรับ corporate proxy) →
+    # certifi (CA bundle ที่ bundle มากับ exe) → default
+    try:
+        import truststore
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        pass
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+    return ssl.create_default_context()
+
+
+_SSL_CTX = _make_ssl_context()
 
 # ── Config — เปลี่ยนเป็น repo จริงของคุณ ──────────────────────
 GITHUB_REPO = "copter-TDFB/PJ-AI-count-sachet-in-packing-line"
@@ -55,7 +76,8 @@ def log(msg: str):
 
 def parse_version(v: str) -> tuple:
     try:
-        return tuple(int(p) for p in v.strip().lstrip('v').split('.'))
+        # ﻿ = UTF-8 BOM ที่บางครั้งติดมากับ version.txt (ไม่ถูกตัดด้วย .strip())
+        return tuple(int(p) for p in v.lstrip('﻿').strip().lstrip('v').split('.'))
     except Exception:
         return (0, 0, 0)
 
@@ -63,7 +85,7 @@ def parse_version(v: str) -> tuple:
 def get_local_version() -> str:
     if VERSION_FILE.exists():
         try:
-            return VERSION_FILE.read_text(encoding='utf-8').strip()
+            return VERSION_FILE.read_text(encoding='utf-8-sig').strip()
         except Exception:
             pass
     return "0.0.0"
@@ -72,7 +94,7 @@ def get_local_version() -> str:
 def fetch_latest_release() -> dict:
     url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
     req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json'})
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as r:
         return json.loads(r.read())
 
 
@@ -149,7 +171,7 @@ class Launcher:
     def _download(self, url: str, total: int) -> Path:
         TMP_DIR.mkdir(parents=True, exist_ok=True)
         zip_path = TMP_DIR / "update.zip"
-        with urllib.request.urlopen(url, timeout=60) as r, open(zip_path, 'wb') as f:
+        with urllib.request.urlopen(url, timeout=60, context=_SSL_CTX) as r, open(zip_path, 'wb') as f:
             downloaded = 0
             while True:
                 buf = r.read(65536)
@@ -172,11 +194,8 @@ class Launcher:
         # zip อาจมี root เป็น "app/" หรือ contents ตรง ๆ — รองรับทั้งคู่
         new_app = extract_dir / "app" if (extract_dir / "app").is_dir() else extract_dir
 
-        backup = BASE / "app_backup"
-        if backup.exists():
-            shutil.rmtree(backup, ignore_errors=True)
         if APP_DIR.exists():
-            shutil.move(str(APP_DIR), str(backup))
+            shutil.rmtree(APP_DIR, ignore_errors=True)
         shutil.move(str(new_app), str(APP_DIR))
         (APP_DIR / "version.txt").write_text(version.lstrip('v'), encoding='utf-8')
         shutil.rmtree(TMP_DIR, ignore_errors=True)
