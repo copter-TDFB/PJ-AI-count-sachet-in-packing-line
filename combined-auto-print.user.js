@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.4
+// @version      2.5
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -26,9 +26,6 @@
     click:   [80, 200],   // ก่อนคลิก element
     confirm: [100, 250],  // ก่อนกด confirm / ปิดท้าย
   };
-
-  // Lazada: หน่วงก่อนกด "พิมพ์ฉลากจัดส่ง" ให้รูปหัวฉลากโหลดทัน (ms) — ปรับได้
-  var LAZADA_PRINT_DELAY = 1000;
 
   // ────────────────────────────────────────────
   // FORMAT DETECTION
@@ -319,13 +316,16 @@
     var closeAfter = opts.closeAfter !== false;   // default: ปิดหน้าต่างหลังพิมพ์
     var maxWaitMs  = opts.maxWaitMs  || 8000;      // เพดานเวลา กันรอค้างถ้าหน้าโหลดไม่จบ
     var bufferMs   = opts.bufferMs   || 350;       // กันชนสั้น ๆ หลังพร้อม
+    // ฟังก์ชัน print ที่จะใช้จริง — เผื่อกรณีต้องดับ window.print ของหน้าไปแล้ว
+    // (เช่น Lazada) ก็ส่งตัวจริงที่เก็บไว้เข้ามาทาง opts.printFn
+    var printFn = opts.printFn || function () { window.print(); };
     var done = false;
 
     function fire() {
       if (done) return;
       done = true;
       setTimeout(function () {
-        try { window.print(); } catch (_e) {}
+        try { printFn(); } catch (_e) {}
         if (closeAfter) { try { window.close(); } catch (_e) {} }
       }, bufferMs);
     }
@@ -577,9 +577,6 @@
       var printLabelBtn = await waitFor('button, a, li, span', 'พิมพ์ฉลากจัดส่ง', 5000);
       await waitUntilEnabled(printLabelBtn);
       await sleep(jitter(J.click));
-      // หน่วง ~1 วิ ก่อนสั่งพิมพ์ เผื่อให้แถว order + รูปหัวฉลาก (โลโก้/บาร์โค้ด)
-      // โหลดเสร็จก่อน กันอาการ "หัวฉลากขาว" จากการยิง print เร็วเกินไป
-      await sleep(LAZADA_PRINT_DELAY);
       printLabelBtn.click();
 
       showToast('[Lazada] เสร็จ! เปิดหน้าใบปะหน้าแล้ว', 'success');
@@ -1029,8 +1026,23 @@
   // LAZADA REACTIVE LOGIC
   // ────────────────────────────────────────────
   if (currentPlatform() === 'lazada') {
-    // ตามที่ตั้งใจ: Lazada จบที่ "พิมพ์ฉลากจัดส่ง" — ไม่ auto-print หน้า label
-    console.log('[Auto Print] Lazada reactive logic active (no auto-print)');
+    // หน้าปริ้นใบปะหน้า เช่น /apps/order/print?jobId=xxxx
+    // ปัญหา "หัวฉลากขาว": Lazada ยิง window.print() เองตอนรูปหัว (โลโก้/บาร์โค้ด)
+    // ยังโหลดไม่เสร็จ — โดยเฉพาะเมื่อแท็บถูกเปิดด้วยสคริปต์ (background/throttle)
+    // วิธีแก้: ดับ window.print ของหน้าทิ้งก่อน แล้วให้ printWhenReady() รอรูป+ฟอนต์
+    // โหลดครบค่อยยิง print ตัวจริงครั้งเดียว (กดเองได้เต็มอยู่แล้ว → ปัญหา timing ล้วน ๆ)
+    if (/^\/apps\/order\/print/.test(location.pathname)) {
+      var _realPrint = window.print.bind(window);
+      window.print = function () {
+        // กลืนการยิง print เร็วเกินของ Lazada ทิ้ง — รอ printWhenReady ยิงตัวจริงแทน
+        console.log('[Auto Print] Lazada: suppressed early window.print()');
+      };
+      console.log('[Auto Print] Lazada print page — waiting for images before print');
+      // closeAfter:false — ไม่ปิดแท็บอัตโนมัติ เผื่อผู้ใช้กดปริ้นซ้ำ
+      printWhenReady({ printFn: _realPrint, closeAfter: false });
+    } else {
+      console.log('[Auto Print] Lazada reactive logic active (seller page)');
+    }
   }
 
   console.log('[Auto Print Label] v2.0 loaded — platform:', currentPlatform(),
