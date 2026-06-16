@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.6
+// @version      2.7
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -20,13 +20,35 @@
 (function () {
   'use strict';
 
-  // ⚠️ @run-at ต้องเป็น document-start (อย่าเปลี่ยนกลับเป็น document-idle)
-  // เหตุผล: หน้าปริ้น Lazada (/apps/order/print) เรียก window.print() ของมันเอง
-  // ตั้งแต่ก่อน document-idle — ถ้าเรารันช้ากว่านั้นจะดับ print ตัวนั้นไม่ทัน
-  // ผลคือปริ้น 2 รอบ (รอบแรกหน้ายังโหลดไม่เสร็จ = ขาด). ต้อง override window.print
-  // ที่ document-start เพื่อชิงดับก่อน Lazada เรียก แล้วให้ printWhenReady() ยิงเอง
-  // ตอนรูปโหลดครบ. โค้ด execution ท้ายไฟล์ทั้งหมดไม่แตะ document.body แบบ
-  // synchronous (อยู่ใน event/setTimeout/waitFor) จึงปลอดภัยกับ document-start.
+  // ⚠️ @run-at เป็น document-start "เฉพาะ" เพื่อดับ print เร็วเกินของหน้าปริ้น Lazada
+  // (/apps/order/print) เท่านั้น — Lazada เรียก window.print() ของมันเองก่อน DOM โหลด
+  // เสร็จ ถ้าชิง override ไม่ทันจะปริ้น 2 รอบ (รอบแรกหน้าไม่ครบ).
+  // โค้ดอื่น "ทั้งหมด" (reactive ทุกแพลตฟอร์ม + listeners + WebSocket) ถูกเลื่อนไปรันตอน
+  // DOMContentLoaded ผ่าน whenDomReady() ด้านล่าง = timing เดิมเทียบเท่า document-idle
+  // → Shopee/TikTok/Odoo ไม่ได้รับผลกระทบจากการเปลี่ยน @run-at นี้เลย.
+
+  // รัน cb ตอน DOM พร้อม (เลียนแบบ document-idle เดิม) — กันโค้ดที่อิง DOM รันเร็วเกิน
+  function whenDomReady(cb) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', cb, { once: true });
+    } else {
+      cb();
+    }
+  }
+
+  // ── EARLY (document-start): จัดการ "เฉพาะ" หน้าปริ้น Lazada ──
+  // ดับ window.print ให้ทันก่อน Lazada เรียก แล้วให้ printWhenReady() ยิง print ตัวจริง
+  // อีกครั้งหลังรูป+ฟอนต์โหลดครบ (กดเองได้เต็มอยู่แล้ว → เป็นปัญหา timing ล้วน ๆ)
+  if (currentPlatform() === 'lazada' && /^\/apps\/order\/print/.test(location.pathname)) {
+    var _realLazadaPrint = window.print.bind(window);
+    window.print = function () {
+      // กลืนการยิง print เร็วเกินของ Lazada ทิ้ง — รอ printWhenReady ยิงตัวจริงแทน
+      console.log('[Auto Print] Lazada: suppressed early window.print()');
+    };
+    console.log('[Auto Print] Lazada print page — waiting for images before print');
+    // closeAfter:false — ไม่ปิดแท็บอัตโนมัติ เผื่อผู้ใช้กดปริ้นซ้ำ
+    printWhenReady({ printFn: _realLazadaPrint, closeAfter: false });
+  }
 
   // human-feel jitter หลัง condition met (ms) — ปรับได้
   var J = {
@@ -808,6 +830,13 @@
     }
   }
 
+  // ════════════════════════════════════════════
+  // ตั้งแต่จุดนี้ลงไป = รันตอน DOMContentLoaded (timing เดิมเทียบเท่า document-idle)
+  // ทุกแพลตฟอร์มทำงานเหมือนเดิม — การเปลี่ยน @run-at เป็น document-start ข้างบน
+  // กระทบเฉพาะ EARLY block ของหน้าปริ้น Lazada เท่านั้น
+  // ════════════════════════════════════════════
+  whenDomReady(function () {
+
   // ────────────────────────────────────────────
   // TIKTOK REACTIVE LOGIC — auto-print label page
   // ────────────────────────────────────────────
@@ -1034,21 +1063,9 @@
   // LAZADA REACTIVE LOGIC
   // ────────────────────────────────────────────
   if (currentPlatform() === 'lazada') {
-    // หน้าปริ้นใบปะหน้า เช่น /apps/order/print?jobId=xxxx
-    // ปัญหา "หัวฉลากขาว": Lazada ยิง window.print() เองตอนรูปหัว (โลโก้/บาร์โค้ด)
-    // ยังโหลดไม่เสร็จ — โดยเฉพาะเมื่อแท็บถูกเปิดด้วยสคริปต์ (background/throttle)
-    // วิธีแก้: ดับ window.print ของหน้าทิ้งก่อน แล้วให้ printWhenReady() รอรูป+ฟอนต์
-    // โหลดครบค่อยยิง print ตัวจริงครั้งเดียว (กดเองได้เต็มอยู่แล้ว → ปัญหา timing ล้วน ๆ)
-    if (/^\/apps\/order\/print/.test(location.pathname)) {
-      var _realPrint = window.print.bind(window);
-      window.print = function () {
-        // กลืนการยิง print เร็วเกินของ Lazada ทิ้ง — รอ printWhenReady ยิงตัวจริงแทน
-        console.log('[Auto Print] Lazada: suppressed early window.print()');
-      };
-      console.log('[Auto Print] Lazada print page — waiting for images before print');
-      // closeAfter:false — ไม่ปิดแท็บอัตโนมัติ เผื่อผู้ใช้กดปริ้นซ้ำ
-      printWhenReady({ printFn: _realPrint, closeAfter: false });
-    } else {
+    // หน้าปริ้น (/apps/order/print) จัดการที่ EARLY block (document-start) ด้านบนแล้ว
+    // ตรงนี้เหลือแค่หน้า seller ปกติ
+    if (!/^\/apps\/order\/print/.test(location.pathname)) {
       console.log('[Auto Print] Lazada reactive logic active (seller page)');
     }
   }
@@ -1096,4 +1113,6 @@
 
     connect();
   })();
+
+  }); // ปิด whenDomReady — จบส่วนที่รันตอน DOMContentLoaded
 })();

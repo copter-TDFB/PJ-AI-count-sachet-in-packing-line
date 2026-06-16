@@ -10,11 +10,17 @@ are loaded. That override only wins the race if it runs **before** Lazada's own
 scripts, so `combined-auto-print.user.js` uses `@run-at document-start` (not
 `document-idle`).
 
+`@run-at` is a single global directive and cannot be scoped per `@match`, so the
+blast radius is contained in code instead: at `document-start` only the Lazada
+print-page override runs; everything else (all platforms' reactive logic,
+listeners, WebSocket bridge) is deferred to `DOMContentLoaded` via a
+`whenDomReady()` gate, reproducing the previous `document-idle` timing exactly.
+
 ## Consequences
 
 - **Do not revert to `document-idle`.** It silently reintroduces the double-print
   (one incomplete at ~50% load, one correct at 100%) — hard to diagnose later.
-- Safe because no top-level code touches `document.body` synchronously; every DOM
-  access is deferred (events, `setTimeout`, `waitFor` polling, promise callbacks),
-  so `body` always exists by the time it runs.
-- Applies to all four platforms (Shopee/TikTok/Odoo/Lazada); audited — no regression.
+- **Keep the `whenDomReady()` gate.** Removing it would run every platform's logic
+  at `document-start` (before `document.body` exists) — unintended scope creep that
+  this design deliberately avoids. Only the Lazada print override belongs early.
+- Shopee/TikTok/Odoo are unaffected: their code runs at the same point as before.
