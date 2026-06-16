@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.3
+// @version      2.4
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -26,6 +26,9 @@
     click:   [80, 200],   // ก่อนคลิก element
     confirm: [100, 250],  // ก่อนกด confirm / ปิดท้าย
   };
+
+  // Lazada: หน่วงก่อนกด "พิมพ์ฉลากจัดส่ง" ให้รูปหัวฉลากโหลดทัน (ms) — ปรับได้
+  var LAZADA_PRINT_DELAY = 1000;
 
   // ────────────────────────────────────────────
   // FORMAT DETECTION
@@ -574,6 +577,9 @@
       var printLabelBtn = await waitFor('button, a, li, span', 'พิมพ์ฉลากจัดส่ง', 5000);
       await waitUntilEnabled(printLabelBtn);
       await sleep(jitter(J.click));
+      // หน่วง ~1 วิ ก่อนสั่งพิมพ์ เผื่อให้แถว order + รูปหัวฉลาก (โลโก้/บาร์โค้ด)
+      // โหลดเสร็จก่อน กันอาการ "หัวฉลากขาว" จากการยิง print เร็วเกินไป
+      await sleep(LAZADA_PRINT_DELAY);
       printLabelBtn.click();
 
       showToast('[Lazada] เสร็จ! เปิดหน้าใบปะหน้าแล้ว', 'success');
