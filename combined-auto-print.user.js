@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
 // @match        https://seller.tiktok.com/*
 // @match        https://seller-th.tiktok.com/*
-// @match        https://tdfb.odoo.com/*
+// @match        https://tdfb.odoo.com/odoo/sales*
 // @match        https://sellercenter.lazada.co.th/*
 // @grant        GM_setValue
 // @grant        GM_getValue
