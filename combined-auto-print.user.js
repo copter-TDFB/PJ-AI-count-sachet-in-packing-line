@@ -1,16 +1,20 @@
 // ==UserScript==
-// @name         Auto Print Label (Shopee + TikTok + Odoo)
+// @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      1.8
-// @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo)
+// @version      2.1
+// @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
+// @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
 // @match        https://seller.tiktok.com/*
 // @match        https://seller-th.tiktok.com/*
 // @match        https://tdfb.odoo.com/*
+// @match        https://sellercenter.lazada.co.th/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/copter-TDFB/PJ-AI-count-sachet-in-packing-line/main/combined-auto-print.user.js
+// @downloadURL  https://raw.githubusercontent.com/copter-TDFB/PJ-AI-count-sachet-in-packing-line/main/combined-auto-print.user.js
 // ==/UserScript==
 
 (function () {
@@ -27,7 +31,8 @@
   // FORMAT DETECTION
   // ────────────────────────────────────────────
   function detectPlatform(text) {
-    if (/^\d{15,20}$/.test(text)) return 'tiktok';
+    if (/^\d{18}$/.test(text)) return 'tiktok';
+    if (/^\d{16}$/.test(text)) return 'lazada';
     if (/^S\d{4,6}$/.test(text)) return 'odoo';
     if (/^[A-Z0-9]{6,25}$/i.test(text) && /[A-Za-z]/.test(text)) return 'shopee';
     return null;
@@ -38,6 +43,7 @@
     if (h.includes('tiktok')) return 'tiktok';
     if (h.includes('shopee')) return 'shopee';
     if (h === 'tdfb.odoo.com') return 'odoo';
+    if (h.includes('lazada')) return 'lazada';
     return null;
   }
 
@@ -85,6 +91,62 @@
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  // นับจำนวนแท็ก/ชิปที่ค้างอยู่ในกล่องค้นหา (ดูจากปุ่ม × รอบๆ input)
+  function countChips(wrap, input) {
+    if (!wrap) return 0;
+    return Array.from(wrap.querySelectorAll(
+      '[class*="remove"], [class*="close"], [class*="tag"], [class*="chip"], [class*="token"]'
+    )).filter(function (el) {
+      return el !== input && !el.contains(input) && isVisibleInput(el);
+    }).length;
+  }
+
+  // เคลีย order เก่าในช่องค้นหาออกก่อน
+  // Lazada ช่องนี้เป็นแบบ "แท็ก/ชิป" — กด Enter แล้วเลขจะสะสมเป็นแท็ก
+  // วิธีที่ทนทานสุด (ไม่ขึ้นกับชื่อ class): กด Backspace ในช่องที่ว่าง
+  // → tag input เกือบทั้งหมด (รวม Ant Design) จะลบแท็กตัวท้ายออกทีละตัว
+  async function clearReactInput(input) {
+    if (!input) return;
+    input.focus();
+    // ล้างตัวอักษรที่ยังพิมพ์ค้าง (ยังไม่ได้กด Enter) ให้ช่องว่างก่อน
+    if (input.value) { setReactValue(input, ''); await sleep(50); }
+
+    var wrap = input.closest('[class*="select"], [class*="input"], [class*="search"]')
+      || input.parentElement;
+
+    // กด Backspace ลบแท็กเก่าทีละตัว สูงสุด 30 ครั้ง — หยุดเมื่อไม่มีแท็กเหลือ
+    for (var i = 0; i < 30; i++) {
+      input.focus();
+      pressBackspace(input);
+      await sleep(70);
+      // ถ้านับแท็กได้และเหลือ 0 → หยุด
+      if (wrap && countChips(wrap, input) === 0 && i >= 1) break;
+    }
+
+    // สำรอง: ถ้ายังมีปุ่ม × ที่คลิกได้ ก็ลองกดให้หมด
+    if (wrap) {
+      for (var n = 0; n < 30; n++) {
+        var removers = Array.from(wrap.querySelectorAll(
+          '[class*="remove"], [class*="close"], [class*="clear"],' +
+          '[aria-label*="close"], [aria-label*="remove"], [aria-label*="ล้าง"]'
+        )).filter(function (el) {
+          return el !== input && !el.contains(input) && isVisibleInput(el);
+        });
+        if (!removers.length) {
+          removers = Array.from(wrap.querySelectorAll('span, i, svg, button')).filter(function (el) {
+            var t = (el.textContent || '').trim();
+            return (t === '×' || t === '✕' || t === '✖') && isVisibleInput(el);
+          });
+        }
+        if (!removers.length) break;
+        removers[0].click();
+        await sleep(80);
+      }
+    }
+
+    if (input.value) setReactValue(input, '');
+  }
+
   // polling 50ms (เร็วกว่าเดิม 4x)
   function waitFor(selector, text, timeout) {
     timeout = timeout || 10000;
@@ -121,9 +183,96 @@
     });
   }
 
-  function pressEnter(el) {
+  function pressKey(el, key, code, keyCode) {
     ['keydown', 'keypress', 'keyup'].forEach(function (t) {
-      el.dispatchEvent(new KeyboardEvent(t, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent(t, {
+        key: key, code: code, keyCode: keyCode, which: keyCode, bubbles: true,
+      }));
+    });
+  }
+
+  function pressEnter(el) {
+    pressKey(el, 'Enter', 'Enter', 13);
+  }
+
+  function pressBackspace(el) {
+    pressKey(el, 'Backspace', 'Backspace', 8);
+  }
+
+  // ── หาช่องค้นหาแบบทนทาน ───────────────────────────────────────────
+  // selector 'input[type="text"]' จะ "ไม่" match <input> ที่ไม่มี type
+  // attribute (ดีฟอลต์เป็น text) ซึ่ง React apps อย่าง Lazada มักเรนเดอร์แบบนี้
+  // → สแกน input ทั้งหมดแล้วเลือกช่องที่มองเห็นได้ + ดูเหมือนช่องค้นหา
+  function isVisibleInput(el) {
+    if (!el) return false;
+    var rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    var style = getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none';
+  }
+
+  function findSearchInput(keywords) {
+    var TEXTLIKE = ['', 'text', 'search'];
+    var candidates = Array.from(document.querySelectorAll('input')).filter(function (el) {
+      var t = (el.getAttribute('type') || '').toLowerCase();
+      return TEXTLIKE.indexOf(t) !== -1 && !el.disabled && isVisibleInput(el);
+    });
+    if (!candidates.length) return null;
+    var kw = (keywords || ['คำสั่งซื้อ', 'หมายเลข', 'order', 'tracking', 'ค้นหา', 'search'])
+      .map(function (k) { return k.toLowerCase(); });
+    var matchesKw = function (s) {
+      s = (s || '').toLowerCase();
+      return kw.some(function (k) { return s.indexOf(k) !== -1; });
+    };
+    var preferred = candidates.find(function (el) {
+      return matchesKw(el.getAttribute('placeholder'))
+        || matchesKw(el.getAttribute('aria-label'))
+        || matchesKw(el.getAttribute('name'));
+    });
+    return preferred || candidates[0];
+  }
+
+  // ── หา input ที่อยู่ "ข้างๆ" ป้ายข้อความที่กำหนด ────────────────────
+  // Lazada: "หมายเลขคำสั่งซื้อ" เป็น dropdown/ป้าย ส่วนช่องที่ต้องพิมพ์เลขจริง
+  // อยู่ติดกัน (ช่องที่มีไอคอนแว่นขยาย) → หาป้ายข้อความก่อน แล้วไต่ขึ้นไปหา
+  // container ที่มี <input> ข้างใน แล้วเลือกช่องกรอกค่า (ไม่ใช่ตัว dropdown)
+  function findInputNearLabel(labelText) {
+    var leaves = Array.from(document.querySelectorAll('body *')).filter(function (el) {
+      return el.children.length === 0
+        && (el.textContent || '').trim().indexOf(labelText) !== -1;
+    });
+    for (var L = 0; L < leaves.length; L++) {
+      var container = leaves[L];
+      for (var i = 0; i < 6 && container; i++) {
+        var inputs = Array.from(container.querySelectorAll('input')).filter(function (inp) {
+          return isVisibleInput(inp) && !inp.disabled;
+        });
+        if (inputs.length) {
+          // ข้ามช่องที่ placeholder คือป้ายเอง (น่าจะเป็น dropdown) ถ้ามีตัวเลือกอื่น
+          var valueInput = inputs.find(function (inp) {
+            return (inp.getAttribute('placeholder') || '').indexOf(labelText) === -1;
+          });
+          return valueInput || inputs[inputs.length - 1];
+        }
+        container = container.parentElement;
+      }
+    }
+    return null;
+  }
+
+  // หาช่องค้นหา Lazada: ลองหาช่องข้างป้าย "หมายเลขคำสั่งซื้อ" ก่อน
+  // ถ้าไม่เจอ ค่อย fallback ไปสแกน input ทั้งหน้า
+  function waitForSearchInput(timeout, keywords) {
+    timeout = timeout || 10000;
+    return new Promise(function (resolve, reject) {
+      var deadline = Date.now() + timeout;
+      function check() {
+        var el = findInputNearLabel('หมายเลขคำสั่งซื้อ') || findSearchInput(keywords);
+        if (el) return resolve(el);
+        if (Date.now() > deadline) return reject(new Error('Timeout: ไม่พบช่องค้นหา (input)'));
+        setTimeout(check, 50);
+      }
+      check();
     });
   }
 
@@ -160,6 +309,59 @@
     };
   }
 
+  // รอให้หน้าพร้อมจริง (โหลดเสร็จ + รูป/บาร์โค้ด + ฟอนต์) แล้วค่อยสั่งพิมพ์
+  // กันเคสพิมพ์เร็วเกินจน layout เพี้ยน / ฉลากล้น / หน้าว่าง
+  function printWhenReady(opts) {
+    opts = opts || {};
+    var closeAfter = opts.closeAfter !== false;   // default: ปิดหน้าต่างหลังพิมพ์
+    var maxWaitMs  = opts.maxWaitMs  || 8000;      // เพดานเวลา กันรอค้างถ้าหน้าโหลดไม่จบ
+    var bufferMs   = opts.bufferMs   || 350;       // กันชนสั้น ๆ หลังพร้อม
+    var done = false;
+
+    function fire() {
+      if (done) return;
+      done = true;
+      setTimeout(function () {
+        try { window.print(); } catch (_e) {}
+        if (closeAfter) { try { window.close(); } catch (_e) {} }
+      }, bufferMs);
+    }
+
+    function whenLoaded(cb) {
+      if (document.readyState === 'complete') cb();
+      else window.addEventListener('load', cb, { once: true });
+    }
+
+    // กันค้าง: ถ้ารอเกิน maxWaitMs ก็พิมพ์เลย
+    var hardTimer = setTimeout(fire, maxWaitMs);
+
+    whenLoaded(function () {
+      var waits = [];
+
+      // รอรูป/บาร์โค้ดทุกตัวในหน้าให้โหลดเสร็จก่อน
+      Array.prototype.slice.call(document.images || []).forEach(function (img) {
+        if (img.complete) return;
+        waits.push(new Promise(function (resolve) {
+          img.addEventListener('load',  resolve, { once: true });
+          img.addEventListener('error', resolve, { once: true });
+        }));
+      });
+
+      // รอฟอนต์ (ถ้าเบราว์เซอร์รองรับ)
+      if (document.fonts && document.fonts.ready) {
+        waits.push(Promise.resolve(document.fonts.ready).catch(function () {}));
+      }
+
+      Promise.all(waits).then(function () {
+        clearTimeout(hardTimer);
+        fire();
+      }, function () {
+        clearTimeout(hardTimer);
+        fire();
+      });
+    });
+  }
+
   // ────────────────────────────────────────────
   // TIKTOK AUTOMATION
   // ────────────────────────────────────────────
@@ -167,12 +369,33 @@
     try {
       showToast('[TikTok] ค้นหา ' + orderNumber + '…');
       var searchInput = await waitFor('input[placeholder*="หมายเลขคำสั่งซื้อ"]', null, 6000);
+
+      // จับ row เก่าก่อน search — ใช้ detect ว่า React flush results ใหม่แล้ว
+      var staleRow = document.querySelector('tbody tr');
+
       searchInput.focus();
       setReactValue(searchInput, orderNumber);
       await sleep(jitter(J.input));
       pressEnter(searchInput);
 
       showToast('[TikTok] รอผลลัพธ์…');
+
+      // รอ row เก่า detach ออกจาก DOM ก่อน (ป้องกันเจอผลลัพธ์เก่า)
+      if (staleRow) {
+        await new Promise(function (resolve) {
+          if (!document.body.contains(staleRow)) return resolve();
+          var fallback = setTimeout(resolve, 5000);
+          var obs = new MutationObserver(function () {
+            if (!document.body.contains(staleRow)) {
+              clearTimeout(fallback);
+              obs.disconnect();
+              resolve();
+            }
+          });
+          obs.observe(document.body, { childList: true, subtree: true });
+        });
+      }
+
       await waitFor('tbody tr', null, 10000);
 
       showToast('[TikTok] เลือก order…');
@@ -222,6 +445,14 @@
       hookWindowOpen();
       confirmBtn.click();
 
+      // หลังกด "พิมพ์" จะมี popup ยืนยันโผล่ในหน้าเดิม — กด "พิมพ์ต่อ" เพื่อเข้าหน้าปริ้น
+      showToast('[TikTok] กด พิมพ์ต่อ…');
+      var continueBtn = await waitFor('button', 'พิมพ์ต่อ', 8000)
+        .catch(function () { return waitFor('button, a, [role="button"]', 'พิมพ์ต่อ', 4000); });
+      await waitUntilEnabled(continueBtn);
+      await sleep(jitter(J.confirm));
+      continueBtn.click();
+
       showToast('[TikTok] เสร็จ! กำลังปริ้นอัตโนมัติ…', 'success');
     } catch (err) {
       showToast('[TikTok] Error: ' + err.message, 'error');
@@ -245,12 +476,26 @@
         return waitFor('input[type="search"], input[type="text"]', null, 4000);
       });
 
+      var staleRow = document.querySelector('tbody tr, [class*="order-item"], [class*="orderItem"]');
+
       searchInput.focus();
       setReactValue(searchInput, orderNumber);
       await sleep(jitter(J.input));
       pressEnter(searchInput);
 
       showToast('[Shopee] รอผลลัพธ์…');
+      if (staleRow) {
+        await new Promise(function (resolve) {
+          if (!document.body.contains(staleRow)) return resolve();
+          var fallback = setTimeout(resolve, 5000);
+          var obs = new MutationObserver(function () {
+            if (!document.body.contains(staleRow)) {
+              clearTimeout(fallback); obs.disconnect(); resolve();
+            }
+          });
+          obs.observe(document.body, { childList: true, subtree: true });
+        });
+      }
       await waitFor('tbody tr, [class*="order-item"], [class*="orderItem"]', null, 10000);
 
       showToast('[Shopee] เลือก order…');
@@ -286,6 +531,59 @@
   }
 
   // ────────────────────────────────────────────
+  // LAZADA AUTOMATION
+  // ────────────────────────────────────────────
+  async function runLazada(orderNumber) {
+    try {
+      showToast('[Lazada] ค้นหา ' + orderNumber + '…');
+
+      var searchInput = await waitForSearchInput(10000);
+
+      var staleRow = document.querySelector('tbody tr, [class*="order-item"], [class*="orderItem"]');
+
+      // เคลีย order เก่าออกจากช่องก่อน แล้วค่อยพิมพ์เลขใหม่
+      searchInput.focus();
+      await clearReactInput(searchInput);
+      await sleep(jitter(J.input));
+      setReactValue(searchInput, orderNumber);
+      await sleep(jitter(J.input));
+      pressEnter(searchInput);
+
+      showToast('[Lazada] รอผลลัพธ์…');
+      if (staleRow) {
+        await new Promise(function (resolve) {
+          if (!document.body.contains(staleRow)) return resolve();
+          var fallback = setTimeout(resolve, 5000);
+          var obs = new MutationObserver(function () {
+            if (!document.body.contains(staleRow)) {
+              clearTimeout(fallback); obs.disconnect(); resolve();
+            }
+          });
+          obs.observe(document.body, { childList: true, subtree: true });
+        });
+      }
+      await waitFor('tbody tr, [class*="order-item"], [class*="orderItem"]', null, 10000);
+
+      showToast('[Lazada] กด การดำเนินการเพิ่มเติม…');
+      var moreBtn = await waitFor('button, a, span', 'การดำเนินการเพิ่มเติม', 8000);
+      await waitUntilEnabled(moreBtn);
+      await sleep(jitter(J.click));
+      moreBtn.click();
+
+      showToast('[Lazada] กด พิมพ์ฉลากจัดส่ง…');
+      var printLabelBtn = await waitFor('button, a, li, span', 'พิมพ์ฉลากจัดส่ง', 5000);
+      await waitUntilEnabled(printLabelBtn);
+      await sleep(jitter(J.click));
+      printLabelBtn.click();
+
+      showToast('[Lazada] เสร็จ! เปิดหน้าใบปะหน้าแล้ว', 'success');
+    } catch (err) {
+      showToast('[Lazada] Error: ' + err.message, 'error');
+      console.error('[AutoPrint Lazada]', err);
+    }
+  }
+
+  // ────────────────────────────────────────────
   // ODOO AUTOMATION (2-phase เพราะต้อง navigate)
   // ────────────────────────────────────────────
 
@@ -297,6 +595,8 @@
         return waitFor('input[placeholder*="Search"], input[placeholder*="ค้นหา"]', null, 4000);
       });
 
+    var staleRow = document.querySelector('.o_data_row');
+
     searchInput.focus();
     searchInput.value = orderNumber;
     searchInput.dispatchEvent(new Event('input',  { bubbles: true }));
@@ -305,6 +605,18 @@
     pressEnter(searchInput);
 
     showToast('[Odoo] รอผลลัพธ์…');
+    if (staleRow) {
+      await new Promise(function (resolve) {
+        if (!document.body.contains(staleRow)) return resolve();
+        var fallback = setTimeout(resolve, 5000);
+        var obs = new MutationObserver(function () {
+          if (!document.body.contains(staleRow)) {
+            clearTimeout(fallback); obs.disconnect(); resolve();
+          }
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+      });
+    }
     var firstRow = await waitFor('.o_data_row', null, 10000);
     await sleep(jitter(J.click));
 
@@ -317,19 +629,113 @@
     await odooPhase2();
   }
 
+  // เปิด PDF ใน overlay ที่มองเห็น แล้วสั่งพิมพ์ "ตัว PDF" โดยตรง (vector = คมเท่ากดเอง)
+  // แทนวิธีเดิมที่พิมพ์หน้า HTML หุ้ม iframe (raster = เบลอ)
+  function openPdfOverlayAndPrint(url) {
+    var overlay = null, objectUrl = null, printed = false;
+
+    function cleanup() {
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      if (objectUrl) { try { URL.revokeObjectURL(objectUrl); } catch (_e) {} }
+      overlay = null; objectUrl = null;
+    }
+
+    function buildOverlay(src, isBlob) {
+      if (isBlob) objectUrl = src;
+
+      overlay = document.createElement('div');
+      overlay.style.cssText = [
+        'position:fixed', 'inset:0', 'z-index:2147483647',
+        'background:rgba(0,0,0,.78)', 'display:flex',
+        'flex-direction:column', 'padding:24px', 'box-sizing:border-box'
+      ].join(';');
+
+      var bar = document.createElement('div');
+      bar.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px';
+
+      var reprintBtn = document.createElement('button');
+      reprintBtn.textContent = '🖨️ พิมพ์อีกครั้ง';
+      reprintBtn.style.cssText = 'padding:6px 14px;border:none;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;font-size:14px';
+
+      var closeBtn = document.createElement('button');
+      closeBtn.textContent = '✕ ปิด';
+      closeBtn.style.cssText = 'padding:6px 14px;border:none;border-radius:6px;background:#e11d48;color:#fff;cursor:pointer;font-size:14px';
+      closeBtn.onclick = cleanup;
+
+      bar.appendChild(reprintBtn);
+      bar.appendChild(closeBtn);
+
+      var iframe = document.createElement('iframe');
+      iframe.style.cssText = 'flex:1;width:100%;border:none;background:#fff;border-radius:6px';
+
+      function doPrint() {
+        try {
+          iframe.contentWindow.focus();
+          iframe.contentWindow.print();
+        } catch (e) {
+          // พิมพ์ผ่าน iframe ไม่ได้ (cross-origin ฯลฯ) → fallback เปิดแท็บใหม่
+          console.warn('[AutoPrint Odoo] iframe print ไม่ได้:', e);
+          showToast('[Odoo] พิมพ์ผ่านหน้านี้ไม่ได้ กำลังเปิดแท็บใหม่…', 'warn');
+          window.open(url, '_blank');
+          cleanup();
+        }
+      }
+      reprintBtn.onclick = doPrint;
+
+      iframe.addEventListener('load', function () {
+        // ปิด overlay อัตโนมัติเมื่อพิมพ์เสร็จ (ผูกกับหน้าต่าง PDF เอง)
+        try {
+          iframe.contentWindow.addEventListener('afterprint', function () {
+            setTimeout(cleanup, 300);
+          }, { once: true });
+        } catch (_e) {}
+
+        if (printed) return;   // กันยิง print ซ้ำ
+        printed = true;
+        setTimeout(doPrint, 400);
+      });
+
+      iframe.src = src;
+      overlay.appendChild(bar);
+      overlay.appendChild(iframe);
+      document.body.appendChild(overlay);
+    }
+
+    // backup: บางเบราว์เซอร์ยิง afterprint ที่ window หลัก
+    window.addEventListener('afterprint', function () {
+      setTimeout(cleanup, 300);
+    }, { once: true });
+
+    // กรณี Odoo: href เป็น blob: URL ของ PDF อยู่แล้ว (same-origin)
+    // → โหลดเข้า iframe ทันทีแบบ synchronous กันโดน Odoo revoke ทิ้ง (ไม่ต้อง fetch ซ้ำ)
+    if (/^blob:/i.test(url)) {
+      buildOverlay(url, false);  // false = ไม่ revoke (เป็น blob ของ Odoo ไม่ใช่ของเรา)
+      return;
+    }
+
+    // กรณี http(s) + download → fetch เป็น blob เพื่อ render inline แม้ต้นทางเป็น attachment
+    fetch(url, { credentials: 'include' })
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.blob();
+      })
+      .then(function (blob) {
+        buildOverlay(URL.createObjectURL(blob), true);
+      })
+      .catch(function (err) {
+        console.warn('[AutoPrint Odoo] fetch blob ล้มเหลว, โหลด url ตรง:', err);
+        showToast('[Odoo] โหลดแบบ blob ไม่ได้ ใช้วิธีสำรอง…', 'warn');
+        buildOverlay(url, false);  // fallback: โหลด url ตรงเข้า iframe
+      });
+  }
+
   async function odooPhase2() {
     hookWindowOpen();
     var _origAClick = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () {
       if (this.hasAttribute('download') && this.href) {
         HTMLAnchorElement.prototype.click = _origAClick;
-        var url = this.href;
-        var html = '<!DOCTYPE html><html><head><title>Print</title><style>*{margin:0;padding:0}iframe{width:100vw;height:100vh;border:none}</style></head>'
-          + '<body><iframe src="' + url + '"></iframe>'
-          + '<script>setTimeout(function(){window.print();},2500);<\/script></body></html>';
-        var blob = new Blob([html], { type: 'text/html' });
-        var htmlUrl = URL.createObjectURL(blob);
-        window.open(htmlUrl, '_blank');
+        openPdfOverlayAndPrint(this.href);
         return;
       }
       return _origAClick.call(this);
@@ -396,15 +802,10 @@
   // ────────────────────────────────────────────
   if (currentPlatform() === 'tiktok') {
     var path = location.pathname.toLowerCase();
-    if (/\/(print|label|awb|shipping)/.test(path)) {
-      function doPrint() {
-        setTimeout(function () { window.print(); window.close(); }, 1000);
-      }
-      if (document.readyState === 'complete') {
-        doPrint();
-      } else {
-        window.addEventListener('load', doPrint);
-      }
+    if (/\/(print|label|awb|shipping|easesafe)/.test(path)) {
+      // closeAfter:false — อย่าปิดหน้าหลังปริ้น เพราะ window.print() บนหน้านี้
+      // (PDF/cross-origin) ไม่ค้างรอ dialog → ถ้าปิดเลยจะปิดแท็บทิ้งก่อนได้ปริ้นจริง
+      printWhenReady({ closeAfter: false });   // รอหน้าพร้อม (โหลด+รูป+ฟอนต์) แล้วค่อยพิมพ์
     }
     console.log('[Auto Print] TikTok reactive logic active');
   }
@@ -422,13 +823,20 @@
     }
 
     if (location.pathname.startsWith('/awbprint')) {
-      var awbObserver = new MutationObserver(function () {
-        var btn = findByText('พิมพ์เอกสาร');
-        if (!btn) return;
-        awbObserver.disconnect();
-        setTimeout(function () { btn.click(); }, jitter([600, 1000]));
-      });
-      awbObserver.observe(document.body, { childList: true, subtree: true });
+      waitFor('button, a, span', 'พิมพ์เอกสาร', 20000)
+        .then(function (el) {
+          var btn = el.closest('button') || el;
+          return waitUntilEnabled(btn, 20000);
+        })
+        .then(function (btn) {
+          setTimeout(function () {
+            window.addEventListener('afterprint', function () { window.close(); }, { once: true });
+            btn.click();
+          }, jitter([600, 1000]));
+        })
+        .catch(function (err) {
+          showToast('[Shopee] ' + (err.message || 'ไม่พบปุ่ม พิมพ์เอกสาร'), 'warn');
+        });
     }
 
     function watchForPrintButton() {
@@ -506,7 +914,7 @@
   // ────────────────────────────────────────────
   // SHARED ORDER DISPATCHER
   // ────────────────────────────────────────────
-  var NAMES = { tiktok: 'TikTok', shopee: 'Shopee', odoo: 'Odoo' };
+  var NAMES = { tiktok: 'TikTok', shopee: 'Shopee', odoo: 'Odoo', lazada: 'Lazada' };
 
   function handleOrderInput(trimmed) {
     var orderPlatform = detectPlatform(trimmed);
@@ -517,6 +925,7 @@
       withBusy(function () {
         if (orderPlatform === 'tiktok') return runTikTok(trimmed);
         if (orderPlatform === 'odoo')   return runOdoo(trimmed);
+        if (orderPlatform === 'lazada') return runLazada(trimmed);
         return runShopee(trimmed);
       });
     } else {
@@ -543,6 +952,7 @@
     withBusy(function () {
       if (job.platform === 'tiktok') return runTikTok(job.orderNumber);
       if (job.platform === 'odoo')   return runOdoo(job.orderNumber);
+      if (job.platform === 'lazada') return runLazada(job.orderNumber);
       return runShopee(job.orderNumber);
     });
   });
@@ -609,7 +1019,15 @@
     _bcTimer = setTimeout(resetBcBuf, 500);
   }, true);
 
-  console.log('[Auto Print Label] v1.8 loaded — platform:', currentPlatform(),
+  // ────────────────────────────────────────────
+  // LAZADA REACTIVE LOGIC
+  // ────────────────────────────────────────────
+  if (currentPlatform() === 'lazada') {
+    // ตามที่ตั้งใจ: Lazada จบที่ "พิมพ์ฉลากจัดส่ง" — ไม่ auto-print หน้า label
+    console.log('[Auto Print] Lazada reactive logic active (no auto-print)');
+  }
+
+  console.log('[Auto Print Label] v2.0 loaded — platform:', currentPlatform(),
     '— Ctrl+V หรือยิง barcode เพื่อ print ใบปะหน้า');
 
   // ────────────────────────────────────────────
