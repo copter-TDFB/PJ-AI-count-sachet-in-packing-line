@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.5
+// @version      2.6
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -12,13 +12,21 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
-// @run-at       document-idle
+// @run-at       document-start
 // @updateURL    https://raw.githubusercontent.com/copter-TDFB/PJ-AI-count-sachet-in-packing-line/main/combined-auto-print.user.js
 // @downloadURL  https://raw.githubusercontent.com/copter-TDFB/PJ-AI-count-sachet-in-packing-line/main/combined-auto-print.user.js
 // ==/UserScript==
 
 (function () {
   'use strict';
+
+  // ⚠️ @run-at ต้องเป็น document-start (อย่าเปลี่ยนกลับเป็น document-idle)
+  // เหตุผล: หน้าปริ้น Lazada (/apps/order/print) เรียก window.print() ของมันเอง
+  // ตั้งแต่ก่อน document-idle — ถ้าเรารันช้ากว่านั้นจะดับ print ตัวนั้นไม่ทัน
+  // ผลคือปริ้น 2 รอบ (รอบแรกหน้ายังโหลดไม่เสร็จ = ขาด). ต้อง override window.print
+  // ที่ document-start เพื่อชิงดับก่อน Lazada เรียก แล้วให้ printWhenReady() ยิงเอง
+  // ตอนรูปโหลดครบ. โค้ด execution ท้ายไฟล์ทั้งหมดไม่แตะ document.body แบบ
+  // synchronous (อยู่ใน event/setTimeout/waitFor) จึงปลอดภัยกับ document-start.
 
   // human-feel jitter หลัง condition met (ms) — ปรับได้
   var J = {
