@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.7
+// @version      2.8
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -9,46 +9,17 @@
 // @match        https://seller-th.tiktok.com/*
 // @match        https://tdfb.odoo.com/odoo/sales*
 // @match        https://sellercenter.lazada.co.th/*
+// @exclude      https://sellercenter.lazada.co.th/apps/order/print*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addValueChangeListener
-// @run-at       document-start
+// @run-at       document-idle
 // @updateURL    https://raw.githubusercontent.com/copter-TDFB/PJ-AI-count-sachet-in-packing-line/main/combined-auto-print.user.js
 // @downloadURL  https://raw.githubusercontent.com/copter-TDFB/PJ-AI-count-sachet-in-packing-line/main/combined-auto-print.user.js
 // ==/UserScript==
 
 (function () {
   'use strict';
-
-  // ⚠️ @run-at เป็น document-start "เฉพาะ" เพื่อดับ print เร็วเกินของหน้าปริ้น Lazada
-  // (/apps/order/print) เท่านั้น — Lazada เรียก window.print() ของมันเองก่อน DOM โหลด
-  // เสร็จ ถ้าชิง override ไม่ทันจะปริ้น 2 รอบ (รอบแรกหน้าไม่ครบ).
-  // โค้ดอื่น "ทั้งหมด" (reactive ทุกแพลตฟอร์ม + listeners + WebSocket) ถูกเลื่อนไปรันตอน
-  // DOMContentLoaded ผ่าน whenDomReady() ด้านล่าง = timing เดิมเทียบเท่า document-idle
-  // → Shopee/TikTok/Odoo ไม่ได้รับผลกระทบจากการเปลี่ยน @run-at นี้เลย.
-
-  // รัน cb ตอน DOM พร้อม (เลียนแบบ document-idle เดิม) — กันโค้ดที่อิง DOM รันเร็วเกิน
-  function whenDomReady(cb) {
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', cb, { once: true });
-    } else {
-      cb();
-    }
-  }
-
-  // ── EARLY (document-start): จัดการ "เฉพาะ" หน้าปริ้น Lazada ──
-  // ดับ window.print ให้ทันก่อน Lazada เรียก แล้วให้ printWhenReady() ยิง print ตัวจริง
-  // อีกครั้งหลังรูป+ฟอนต์โหลดครบ (กดเองได้เต็มอยู่แล้ว → เป็นปัญหา timing ล้วน ๆ)
-  if (currentPlatform() === 'lazada' && /^\/apps\/order\/print/.test(location.pathname)) {
-    var _realLazadaPrint = window.print.bind(window);
-    window.print = function () {
-      // กลืนการยิง print เร็วเกินของ Lazada ทิ้ง — รอ printWhenReady ยิงตัวจริงแทน
-      console.log('[Auto Print] Lazada: suppressed early window.print()');
-    };
-    console.log('[Auto Print] Lazada print page — waiting for images before print');
-    // closeAfter:false — ไม่ปิดแท็บอัตโนมัติ เผื่อผู้ใช้กดปริ้นซ้ำ
-    printWhenReady({ printFn: _realLazadaPrint, closeAfter: false });
-  }
 
   // human-feel jitter หลัง condition met (ms) — ปรับได้
   var J = {
@@ -346,16 +317,13 @@
     var closeAfter = opts.closeAfter !== false;   // default: ปิดหน้าต่างหลังพิมพ์
     var maxWaitMs  = opts.maxWaitMs  || 8000;      // เพดานเวลา กันรอค้างถ้าหน้าโหลดไม่จบ
     var bufferMs   = opts.bufferMs   || 350;       // กันชนสั้น ๆ หลังพร้อม
-    // ฟังก์ชัน print ที่จะใช้จริง — เผื่อกรณีต้องดับ window.print ของหน้าไปแล้ว
-    // (เช่น Lazada) ก็ส่งตัวจริงที่เก็บไว้เข้ามาทาง opts.printFn
-    var printFn = opts.printFn || function () { window.print(); };
     var done = false;
 
     function fire() {
       if (done) return;
       done = true;
       setTimeout(function () {
-        try { printFn(); } catch (_e) {}
+        try { window.print(); } catch (_e) {}
         if (closeAfter) { try { window.close(); } catch (_e) {} }
       }, bufferMs);
     }
@@ -830,13 +798,6 @@
     }
   }
 
-  // ════════════════════════════════════════════
-  // ตั้งแต่จุดนี้ลงไป = รันตอน DOMContentLoaded (timing เดิมเทียบเท่า document-idle)
-  // ทุกแพลตฟอร์มทำงานเหมือนเดิม — การเปลี่ยน @run-at เป็น document-start ข้างบน
-  // กระทบเฉพาะ EARLY block ของหน้าปริ้น Lazada เท่านั้น
-  // ════════════════════════════════════════════
-  whenDomReady(function () {
-
   // ────────────────────────────────────────────
   // TIKTOK REACTIVE LOGIC — auto-print label page
   // ────────────────────────────────────────────
@@ -1063,11 +1024,8 @@
   // LAZADA REACTIVE LOGIC
   // ────────────────────────────────────────────
   if (currentPlatform() === 'lazada') {
-    // หน้าปริ้น (/apps/order/print) จัดการที่ EARLY block (document-start) ด้านบนแล้ว
-    // ตรงนี้เหลือแค่หน้า seller ปกติ
-    if (!/^\/apps\/order\/print/.test(location.pathname)) {
-      console.log('[Auto Print] Lazada reactive logic active (seller page)');
-    }
+    // ตามที่ตั้งใจ: Lazada จบที่ "พิมพ์ฉลากจัดส่ง" — ไม่ auto-print หน้า label
+    console.log('[Auto Print] Lazada reactive logic active (no auto-print)');
   }
 
   console.log('[Auto Print Label] v2.0 loaded — platform:', currentPlatform(),
@@ -1113,6 +1071,4 @@
 
     connect();
   })();
-
-  }); // ปิด whenDomReady — จบส่วนที่รันตอน DOMContentLoaded
 })();
