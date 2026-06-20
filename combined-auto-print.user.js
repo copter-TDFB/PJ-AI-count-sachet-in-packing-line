@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.11
+// @version      2.12
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -476,27 +476,26 @@
         return waitFor('input[type="search"], input[type="text"]', null, 4000);
       });
 
-      var staleRow = document.querySelector('tbody tr, [class*="order-item"], [class*="orderItem"]');
-
       searchInput.focus();
       setReactValue(searchInput, orderNumber);
       await sleep(jitter(J.input));
       pressEnter(searchInput);
 
       showToast('[Shopee] รอผลลัพธ์…');
-      if (staleRow) {
-        await new Promise(function (resolve) {
-          if (!document.body.contains(staleRow)) return resolve();
-          var fallback = setTimeout(resolve, 5000);
-          var obs = new MutationObserver(function () {
-            if (!document.body.contains(staleRow)) {
-              clearTimeout(fallback); obs.disconnect(); resolve();
-            }
-          });
-          obs.observe(document.body, { childList: true, subtree: true });
-        });
-      }
-      await waitFor('tbody tr, [class*="order-item"], [class*="orderItem"]', null, 10000);
+      // Shopee re-render แถวเดิมแบบ in-place → รอให้แถวเก่า detach ไม่ได้ (เดิมค้าง fallback 5s ทุกครั้ง)
+      // เปลี่ยนเป็นรอจนมี "แถวที่ข้อความตรงกับเลขออเดอร์" โผล่ขึ้นมาแทน — เร็วและยืนยันผลลัพธ์ถูกตัว
+      var rowSel = 'tbody tr, [class*="order-item"], [class*="orderItem"]';
+      await new Promise(function (resolve) {
+        var deadline = Date.now() + 4000;
+        function check() {
+          var rows = Array.from(document.querySelectorAll(rowSel));
+          var hit = rows.find(function (r) { return r.textContent.includes(orderNumber); });
+          if (hit || Date.now() > deadline) return resolve();
+          setTimeout(check, 50);
+        }
+        check();
+      });
+      await waitFor(rowSel, null, 10000);
 
       showToast('[Shopee] เลือก order…');
       var orderCb = await waitFor(
