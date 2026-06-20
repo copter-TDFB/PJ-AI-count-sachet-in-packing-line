@@ -1,6 +1,6 @@
 # Project Context - PJ AI Count Sachet PK
 
-อัปเดตล่าสุด: 2026-05-30
+อัปเดตล่าสุด: 2026-06-16
 
 ไฟล์นี้เป็นเอกสาร onboarding สำหรับคนหรือ AI ที่กลับมาแก้โปรเจกต์นี้ในรอบถัดไป ให้อ่านไฟล์นี้ก่อนเปิดโค้ด เพื่อเข้าใจภาพรวม, logic, จุดเสี่ยง และวิธี build/release โดยไม่ต้องไล่ทั้งโปรเจกต์ตั้งแต่ต้น
 
@@ -43,7 +43,9 @@ Flow ใช้งานจริง:
 - `batch_eval_app.py` - PyQt6 tool สำหรับประเมินโมเดลกับ dataset folder และ export CSV
 - `build.ps1` - build exe และประกอบ release folder
 - `release.ps1` - build, zip, upload GitHub Release ผ่าน `gh`
+- `combined-auto-print.user.js` - Tampermonkey userscript auto-print ใบปะหน้า (Shopee/TikTok/Odoo/Lazada); รับ order ผ่าน WebSocket bridge port 9999, paste, หรือ scanner; auto-update จาก `main`
 - `AGENTS.md` - คำสั่งสำหรับ AI ให้อ่าน `PROJECT_CONTEXT.md` ก่อนทำงาน
+- `CLAUDE.md` - guidance สำหรับ Claude Code (สรุปสั้น ชี้มาที่เอกสารนี้)
 - `PROJECT_CONTEXT.md` - เอกสารนี้
 
 โมเดลและ asset:
@@ -454,6 +456,52 @@ Tampermonkey ฝั่ง browser:
 - connect `ws://localhost:9999`
 - รับ message เป็น barcode string ดิบ (ไม่มี JSON envelope)
 - จัดการ filter / dispatch เอง (เช่น TikTok 18 หลัก vs Shopee alphanumeric)
+
+## Userscript Logic (`combined-auto-print.user.js`)
+
+Tampermonkey userscript ที่รันในเบราว์เซอร์ ฝั่งคู่กับ desktop app เพื่อ **auto-print ใบปะหน้า** บน Shopee / TikTok / Odoo / Lazada เมื่อได้รับเลข order
+
+Metadata สำคัญ (header `==UserScript==`):
+
+- `@version` ปัจจุบัน `2.11` — **ต้อง bump ทุกครั้งที่แก้ไฟล์นี้** เพราะ Tampermonkey ใช้เทียบ version ตอน auto-update
+- `@match` ครอบ `seller.shopee.co.th`, `seller.tiktok.com`, `seller-th.tiktok.com`, `sellercenter.lazada.co.th` และ **`tdfb.odoo.com/odoo*`** (ทั้ง Odoo ไม่ใช่แค่ `/odoo/sales*`) — Odoo เป็น SPA, Tampermonkey inject เฉพาะตอน full load; ถ้า match แค่ `/odoo/sales*` แล้ว user soft-nav จาก `/odoo` เข้าไป จะไม่ถูก inject เลย (ดู ADR-0002)
+- `@updateURL` / `@downloadURL` ชี้ไป `raw.githubusercontent.com/copter-TDFB/PJ-AI-count-sachet-in-packing-line/main/combined-auto-print.user.js` → Tampermonkey ดึง update จาก branch `main` โดยตรง (ต้อง commit + push ไฟล์นี้ขึ้น `main` ถึงจะ update ถึงเครื่อง user)
+- `@grant GM_setValue / GM_addValueChangeListener` ใช้ทำ cross-tab relay
+
+Input 3 ทางที่ trigger งาน (ทุกทางเรียก `handleOrderInput()`):
+
+1. **WebSocket bridge** (`initScannerBridge`) — connect `ws://localhost:9999`, รับ barcode ดิบจาก desktop app (`BarcodeBridgeWorker` ส่ง `picking.origin` มา), reconnect อัตโนมัติทุก 3 วินาทีถ้า socket ปิด
+2. **Ctrl+V paste** — ดัก paste event, อ่าน clipboard, ถ้า `detectPlatform()` รู้จัก format จะ preventDefault แล้วยิงงาน
+3. **USB HID barcode scanner** — ดัก `keydown` ระดับ document; ตรวจ burst เร็ว (`SCANNER_GAP_MS = 80`), reset buffer ถ้าพิมพ์ช้า (= คนพิมพ์), trigger เมื่อกด Enter และ buffer length >= 6; skip ถ้า focus อยู่บน input/textarea
+
+`detectPlatform(text)` route ตาม format ของเลข order:
+
+- `^\d{18}$` → `tiktok`
+- `^\d{16}$` → `lazada`
+- `^S\d{4,6}$` หรือ `^MZS-\d+$` → `odoo` (เลข source document เช่น `S00123` หรือ `MZS-240278` — ตรงกับ `picking.origin` ที่ bridge ส่ง)
+- `^[A-Z0-9]{6,25}$` ที่มีตัวอักษรปน → `shopee`
+- ไม่ match → `null` (ไม่ทำอะไร)
+
+Cross-tab relay logic (สำคัญ — เพราะแต่ละ platform เป็นคนละ tab/domain):
+
+- `currentPlatform()` ดูจาก `location.hostname` ว่า tab นี้คือ platform ไหน
+- ถ้า platform ของ order ตรงกับ tab ปัจจุบัน → run printing flow ของ platform นั้นเลย (`runTikTok` / `runShopee` / `runOdoo` / `runLazada`)
+- ถ้าไม่ตรง → `GM_setValue('auto_print_job', {...})` แล้วโชว์ toast บอกให้สลับ tab
+- ทุก tab subscribe `GM_addValueChangeListener('auto_print_job', ...)`; tab ที่ตรง platform จะ `window.focus()` แล้ว run flow เอง
+- GM storage ทำงานข้าม domain ได้ จึง relay ระหว่าง Shopee/TikTok/Odoo/Lazada tab ได้แม้คนละ origin
+
+Print flow ต่อ platform (`runXxx(orderNumber)`):
+
+- ค้น search input ด้วย heuristic (`findSearchInput` / `findInputNearLabel`), set ค่าแบบ React-aware (`setReactValue`), กด Enter, รอ element ด้วย `waitFor` / `waitUntilEnabled`
+- หา/กดปุ่มพิมพ์ (เช่น TikTok เลือก label A6), `hookWindowOpen()` ดัก `window.open` เพื่อ auto `print()` + `close()` หน้าต่าง label ที่เด้งมา
+- Odoo เป็น 2 phase แต่ทำต่อเนื่องในหน้าเดียว: `odooPhase1` (ค้นหา → รอการ์ด Kanban/row ของ list ที่ข้อความตรงกับเลข order ด้วย selector รวม `.o_kanban_record, .o_data_row` แล้วคลิกใบนั้น → `waitForPath` รอ URL เป็น `/odoo/sales/<id>`) → เรียก `odooPhase2` ต่อทันที (กด gear → Print → ใบปะหน้า). `runOdoo` อ่าน `location.pathname` **สด ๆ ตอนถูกเรียก** จึง act เฉพาะหน้า Sales — สแกน/วางตอนอยู่หน้าอื่น (เช่น `/odoo` dashboard) จะ **เงียบสนิท ไม่ทำอะไรและไม่เตือน** (operator ต้องจอด Odoo tab ไว้ที่ `/odoo/sales*`). ไม่มีกลไก navigate ข้ามหน้า/`odoo_pending_job` อีกแล้ว (ลบออก v2.11 — ดู ADR-0002)
+- มี jitter หน่วงเวลาแบบ human-feel (object `J`) ก่อนพิมพ์/คลิก/confirm
+
+หมายเหตุการแก้ไข:
+
+- ไฟล์นี้ **อยู่ใน git** (ไม่เหมือน model/zip ที่ ignore) — แก้แล้วต้อง commit + push `main` เพื่อให้ auto-update ถึง user
+- ถ้าเพิ่ม platform ใหม่ ต้องแก้ `detectPlatform`, `currentPlatform`, `@match`, เพิ่ม `runXxx`, และ map ใน `handleOrderInput` + relay listener
+- selector ของแต่ละ platform เปราะ (อิง DOM ของเว็บจริง) — เว็บอัปเดต UI เมื่อไหร่อาจพังเงียบ ๆ
 
 ## Detection Classes And Mapping
 
