@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.14
+// @version      2.15
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -582,10 +582,20 @@
   async function odooPhase1(orderNumber) {
     showToast('[Odoo] ค้นหา ' + orderNumber + '…');
 
-    var searchInput = await waitFor('input.o_searchview_input', null, 6000)
-      .catch(function () {
-        return waitFor('input[placeholder*="Search"], input[placeholder*="ค้นหา"]', null, 4000);
-      });
+    // หา search input; ถ้ากล่องถูกยุบเหลือปุ่มแว่น 🔍 → กดเปิดก่อน
+    // (กดเฉพาะตอนไม่เจอกล่อง เพราะ 🔍 เป็น toggle — ถ้ากล่องเปิดอยู่แล้วกดซ้ำจะปิด)
+    var searchInput = document.querySelector('input.o_searchview_input');
+    if (!searchInput) {
+      var searchToggle = document.querySelector('button .fa-search, button .oi-search');
+      if (searchToggle) {
+        (searchToggle.closest('button') || searchToggle).click();
+        await sleep(jitter(J.input));
+      }
+      searchInput = await waitFor('input.o_searchview_input', null, 6000)
+        .catch(function () {
+          return waitFor('input[placeholder*="Search"], input[placeholder*="ค้นหา"]', null, 4000);
+        });
+    }
 
     searchInput.focus();
     searchInput.value = orderNumber;
