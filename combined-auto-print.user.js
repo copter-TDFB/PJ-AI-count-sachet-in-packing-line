@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.9
+// @version      2.10
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -970,55 +970,11 @@
   }, true);
 
   // ────────────────────────────────────────────
-  // BARCODE SCANNER — USB HID keyboard wedge
-  // scanner พิมพ์ตัวอักษรเร็ว (<80ms ต่อตัว) แล้วกด Enter
+  // BARCODE SCANNER (in-page USB HID keyboard wedge) — REMOVED (v2.10)
+  // เดิมหน้าเว็บดักคีย์จากเครื่องสแกนเองแล้วสั่งพิมพ์ทันที ซึ่งข้ามขั้นตอน
+  // นับ/verify ใน desktop app → ตั้งใจเอาออก ให้พิมพ์ได้แค่ผ่าน bridge
+  // (ws://localhost:9999 หลัง desktop นับครบ) หรือ Ctrl+V เท่านั้น
   // ────────────────────────────────────────────
-  var _bcBuf = '';
-  var _bcLastKey = 0;
-  var _bcTimer = null;
-  var SCANNER_GAP_MS = 80;
-
-  function isFocusedOnInput() {
-    var el = document.activeElement;
-    if (!el) return false;
-    var tag = el.tagName.toLowerCase();
-    return tag === 'input' || tag === 'textarea' || el.isContentEditable;
-  }
-
-  function resetBcBuf() {
-    _bcBuf = '';
-    _bcLastKey = 0;
-    clearTimeout(_bcTimer);
-    _bcTimer = null;
-  }
-
-  document.addEventListener('keydown', function (e) {
-    // ถ้า focus อยู่บน input ไม่ต้องทำอะไร
-    if (isFocusedOnInput()) { resetBcBuf(); return; }
-
-    if (e.key === 'Enter') {
-      var buf = _bcBuf;
-      resetBcBuf();
-      if (buf.length >= 6) handleOrderInput(buf);
-      return;
-    }
-
-    // รับแค่ตัวอักษรที่พิมพ์ได้ (ยาว 1 ตัว)
-    if (e.key.length !== 1) { resetBcBuf(); return; }
-
-    var now = Date.now();
-    // ถ้าช้าเกิน SCANNER_GAP_MS = คนพิมพ์ ไม่ใช่ scanner → reset
-    if (_bcBuf.length > 0 && now - _bcLastKey > SCANNER_GAP_MS) {
-      resetBcBuf();
-    }
-
-    _bcBuf += e.key;
-    _bcLastKey = now;
-
-    // safety reset ถ้าไม่มี Enter ใน 500ms
-    clearTimeout(_bcTimer);
-    _bcTimer = setTimeout(resetBcBuf, 500);
-  }, true);
 
   // ────────────────────────────────────────────
   // LAZADA REACTIVE LOGIC
