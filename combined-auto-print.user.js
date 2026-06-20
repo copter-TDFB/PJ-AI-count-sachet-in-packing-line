@@ -1,17 +1,16 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.10
+// @version      2.11
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
 // @match        https://seller.tiktok.com/*
 // @match        https://seller-th.tiktok.com/*
-// @match        https://tdfb.odoo.com/odoo/sales*
+// @match        https://tdfb.odoo.com/odoo*
 // @match        https://sellercenter.lazada.co.th/*
 // @exclude      https://sellercenter.lazada.co.th/apps/order/print*
 // @grant        GM_setValue
-// @grant        GM_getValue
 // @grant        GM_addValueChangeListener
 // @run-at       document-idle
 // @updateURL    https://raw.githubusercontent.com/copter-TDFB/PJ-AI-count-sachet-in-packing-line/main/combined-auto-print.user.js
@@ -783,15 +782,11 @@
         await odooPhase2();
       } else if (/^\/odoo\/sales(\?|$)/.test(path)) {
         await odooPhase1(orderNumber);
-      } else {
-        GM_setValue('odoo_pending_job', JSON.stringify({
-          orderNumber: orderNumber,
-          phase: 1,
-          ts: Date.now(),
-        }));
-        showToast('[Odoo] กำลังไปหน้า Sales…');
-        location.href = '/odoo/sales';
       }
+      // หน้าอื่นที่ไม่ใช่ Sales (เช่น /odoo dashboard) → ไม่ทำอะไร เงียบสนิท
+      // (ไม่ navigate, ไม่ toast). script @match ครอบ /odoo* ทั้งหมดเพื่อให้โหลด
+      // ตั้งแต่หน้าแรกแล้วอยู่ยาวข้าม SPA soft-nav แต่ act เฉพาะหน้า Sales —
+      // operator ต้องจอด Odoo tab ไว้ที่ /odoo/sales* ตอนสแกน
     } catch (err) {
       showToast('[Odoo] Error: ' + err.message, 'error');
       console.error('[AutoPrint Odoo]', err);
@@ -864,38 +859,13 @@
   }
 
   // ────────────────────────────────────────────
-  // ODOO REACTIVE LOGIC — pickup pending job หลัง navigate
+  // ODOO — ไม่มี reactive logic ตอนโหลด
+  // @match ครอบ /odoo* ทั้งหมด → script โหลดตั้งแต่หน้า /odoo แล้วอยู่ยาวข้าม
+  // SPA soft-nav (paste/WS/relay listener ผูกครั้งเดียว ไม่หลุด) → ทำงานเมื่อ
+  // ได้รับ order เท่านั้น ผ่าน runOdoo ซึ่ง act เฉพาะหน้า Sales (อ่าน path สด)
   // ────────────────────────────────────────────
   if (currentPlatform() === 'odoo') {
-    (function () {
-      var raw = GM_getValue('odoo_pending_job');
-      if (!raw) return;
-
-      var job;
-      try { job = JSON.parse(raw); } catch (_) { return; }
-      if (Date.now() - job.ts > 30000) { GM_setValue('odoo_pending_job', ''); return; }
-
-      var p = location.pathname;
-      var isListPage   = /^\/odoo\/sales(\?|$)/.test(p);
-      var isDetailPage = /^\/odoo\/sales\/\d+/.test(p);
-
-      if (job.phase === 1 && isListPage) {
-        GM_setValue('odoo_pending_job', '');
-        setTimeout(function () {
-          odooPhase1(job.orderNumber).catch(function (err) {
-            showToast('[Odoo] Error: ' + err.message, 'error');
-          });
-        }, 1200);
-      } else if (job.phase === 2 && isDetailPage) {
-        GM_setValue('odoo_pending_job', '');
-        setTimeout(function () {
-          odooPhase2().catch(function (err) {
-            showToast('[Odoo] Error: ' + err.message, 'error');
-          });
-        }, 1200);
-      }
-    })();
-    console.log('[Auto Print] Odoo reactive logic active');
+    console.log('[Auto Print] Odoo active (input-triggered only)');
   }
 
   // ────────────────────────────────────────────
