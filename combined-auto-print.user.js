@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.12
+// @version      2.13
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -482,37 +482,30 @@
       pressEnter(searchInput);
 
       showToast('[Shopee] รอผลลัพธ์…');
-      // Shopee re-render แถวเดิมแบบ in-place → รอให้แถวเก่า detach ไม่ได้ (เดิมค้าง fallback 5s ทุกครั้ง)
-      // เปลี่ยนเป็นรอจนมี "แถวที่ข้อความตรงกับเลขออเดอร์" โผล่ขึ้นมาแทน — เร็วและยืนยันผลลัพธ์ถูกตัว
-      var rowSel = 'tbody tr, [class*="order-item"], [class*="orderItem"]';
-      await new Promise(function (resolve) {
-        var deadline = Date.now() + 4000;
+      // Shopee UI เป็นการ์ด (div.package-…-order-card) ไม่ใช่ <table> และ "ไม่มี checkbox"
+      // เลือก order — แต่ละการ์ดมีปุ่ม "พิมพ์ใบปะหน้าพัสดุ" ตรงๆ
+      // รอจน "การ์ดที่มีเลขออเดอร์ตรงกับที่ค้นหา" โผล่ = ผลลัพธ์โหลดเสร็จ + ยืนยันออเดอร์ถูกตัว
+      await new Promise(function (resolve, reject) {
+        var deadline = Date.now() + 10000;
         function check() {
-          var rows = Array.from(document.querySelectorAll(rowSel));
-          var hit = rows.find(function (r) { return r.textContent.includes(orderNumber); });
-          if (hit || Date.now() > deadline) return resolve();
+          var cards = document.querySelectorAll(
+            '[class*="order-card"], [class*="order-item-infos"], [data-testid*="order"]'
+          );
+          var hit = Array.from(cards).some(function (c) {
+            return (c.textContent || '').includes(orderNumber);
+          });
+          if (hit) return resolve();
+          if (Date.now() > deadline) return reject(new Error('ไม่พบออเดอร์ ' + orderNumber + ' ในผลค้นหา'));
           setTimeout(check, 50);
         }
         check();
       });
-      await waitFor(rowSel, null, 10000);
 
-      showToast('[Shopee] เลือก order…');
-      var orderCb = await waitFor(
-        'tbody input[type="checkbox"], [class*="order"] input[type="checkbox"]',
-        null, 5000
-      ).catch(function () { return null; });
-      if (orderCb) {
-        await waitUntilEnabled(orderCb);
-        await sleep(jitter(J.click));
-        if (!orderCb.checked) orderCb.click();
-      }
-
-      showToast('[Shopee] เตรียมจัดส่ง…');
+      showToast('[Shopee] กดพิมพ์ใบปะหน้า…');
       var actionBtn = await Promise.any([
-        waitFor('button', 'เตรียมจัดส่ง',    3000),
-        waitFor('button', 'พิมพ์ใบปะหน้า',   3000),
-        waitFor('button', 'จัดส่งพัสดุ',      3000),
+        waitFor('button', 'พิมพ์ใบปะหน้า',   5000),
+        waitFor('button', 'เตรียมจัดส่ง',    5000),
+        waitFor('button', 'จัดส่งพัสดุ',      5000),
       ]).catch(function () { return null; });
 
       if (actionBtn) {
@@ -521,7 +514,7 @@
         actionBtn.click();
         showToast('[Shopee] รอกด ตกลง อัตโนมัติ…');
       } else {
-        showToast('[Shopee] ค้นหาเสร็จ — กด เตรียมจัดส่ง เองแล้ว script จะ print ให้', 'warn');
+        showToast('[Shopee] ค้นหาเสร็จ — กดพิมพ์ใบปะหน้าเองได้เลย', 'warn');
       }
     } catch (err) {
       showToast('[Shopee] Error: ' + err.message, 'error');
