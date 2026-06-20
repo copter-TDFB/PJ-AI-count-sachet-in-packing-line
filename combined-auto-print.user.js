@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.8
+// @version      2.9
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -34,7 +34,7 @@
   function detectPlatform(text) {
     if (/^\d{18}$/.test(text)) return 'tiktok';
     if (/^\d{16}$/.test(text)) return 'lazada';
-    if (/^S\d{4,6}$/.test(text)) return 'odoo';
+    if (/^S\d{4,6}$/.test(text) || /^MZS-\d+$/.test(text)) return 'odoo';
     if (/^[A-Z0-9]{6,25}$/i.test(text) && /[A-Za-z]/.test(text)) return 'shopee';
     return null;
   }
