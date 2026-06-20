@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.15
+// @version      2.16
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -598,6 +598,7 @@
     }
 
     searchInput.focus();
+    await clearReactInput(searchInput);   // ลบ facet/chip เก่า + ตัวอักษรค้างก่อน (กัน chip AND กันจนหาไม่เจอ)
     searchInput.value = orderNumber;
     searchInput.dispatchEvent(new Event('input',  { bubbles: true }));
     searchInput.dispatchEvent(new Event('change', { bubbles: true }));
