@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.13
+// @version      2.14
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -587,8 +587,6 @@
         return waitFor('input[placeholder*="Search"], input[placeholder*="ค้นหา"]', null, 4000);
       });
 
-    var staleRow = document.querySelector('.o_data_row');
-
     searchInput.focus();
     searchInput.value = orderNumber;
     searchInput.dispatchEvent(new Event('input',  { bubbles: true }));
@@ -597,22 +595,14 @@
     pressEnter(searchInput);
 
     showToast('[Odoo] รอผลลัพธ์…');
-    if (staleRow) {
-      await new Promise(function (resolve) {
-        if (!document.body.contains(staleRow)) return resolve();
-        var fallback = setTimeout(resolve, 5000);
-        var obs = new MutationObserver(function () {
-          if (!document.body.contains(staleRow)) {
-            clearTimeout(fallback); obs.disconnect(); resolve();
-          }
-        });
-        obs.observe(document.body, { childList: true, subtree: true });
-      });
-    }
-    var firstRow = await waitFor('.o_data_row', null, 10000);
+    // รอ "ใบที่ใช่" โดยตรง — ข้อความบนการ์ด/แถวต้องมีเลข order
+    // (รับทั้ง Kanban .o_kanban_record และ list .o_data_row) → กันการ์ดเก่าค้างได้เอง
+    // จึงไม่ต้องเฝ้า staleRow detach อีก
+    var matched = await waitFor('.o_kanban_record, .o_data_row', orderNumber, 10000);
     await sleep(jitter(J.click));
 
-    var clickTarget = firstRow.querySelector('td.o_data_cell') || firstRow;
+    // Kanban: คลิกตัวการ์ด | list: คลิก cell
+    var clickTarget = matched.querySelector('td.o_data_cell') || matched;
     clickTarget.click();
     showToast('[Odoo] กำลังเปิด order…');
 
