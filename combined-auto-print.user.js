@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.16
+// @version      2.17
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -148,14 +148,19 @@
   }
 
   // polling 50ms (เร็วกว่าเดิม 4x)
-  function waitFor(selector, text, timeout) {
+  function waitFor(selector, text, timeout, exact) {
     timeout = timeout || 10000;
+    // exact=true → เทียบเป๊ะหลัง normalize (trim+ยุบช่องว่าง) แทน substring includes
+    // ใช้ตอนต้องแยกข้อความที่เป็น substring ของกันเอง เช่น "ใบปะหน้า" vs "ใบปะหน้า Website"
+    var norm = function (s) { return (s || '').trim().replace(/\s+/g, ' '); };
     return new Promise(function (resolve, reject) {
       var deadline = Date.now() + timeout;
       function check() {
         var candidates = Array.from(document.querySelectorAll(selector));
         var el = text
-          ? candidates.find(function (c) { return c.textContent.includes(text); })
+          ? candidates.find(function (c) {
+              return exact ? norm(c.textContent) === text : c.textContent.includes(text);
+            })
           : candidates[0];
         if (el) return resolve(el);
         if (Date.now() > deadline) return reject(new Error('Timeout: ' + selector + (text ? ' "' + text + '"' : '')));
@@ -579,7 +584,7 @@
   // ODOO AUTOMATION (2-phase เพราะต้อง navigate)
   // ────────────────────────────────────────────
 
-  async function odooPhase1(orderNumber) {
+  async function odooPhase1(orderNumber, useWebsiteLabel) {
     showToast('[Odoo] ค้นหา ' + orderNumber + '…');
 
     // หา search input; ถ้ากล่องถูกยุบเหลือปุ่มแว่น 🔍 → กดเปิดก่อน
@@ -619,7 +624,7 @@
 
     await waitForPath(/^\/odoo\/sales\/\d+/, 10000);
     await sleep(jitter(J.click));
-    await odooPhase2();
+    await odooPhase2(useWebsiteLabel);
   }
 
   // เปิด PDF ใน overlay ที่มองเห็น แล้วสั่งพิมพ์ "ตัว PDF" โดยตรง (vector = คมเท่ากดเอง)
@@ -722,7 +727,7 @@
       });
   }
 
-  async function odooPhase2() {
+  async function odooPhase2(useWebsiteLabel) {
     hookWindowOpen();
     var _origAClick = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () {
@@ -757,10 +762,13 @@
     printItem.dispatchEvent(new MouseEvent('mouseover',  { bubbles: true }));
     if (printItem.tagName !== 'A') printItem.click();
 
-    showToast('[Odoo] คลิก ใบปะหน้า…');
+    // MZS → "ใบปะหน้า Website", S (เดิม) → "ใบปะหน้า"
+    // เทียบเป๊ะ (exact) เพราะ "ใบปะหน้า" เป็น substring ของ "ใบปะหน้า Website" — includes จะกดผิดได้
+    var labelText = useWebsiteLabel ? 'ใบปะหน้า Website' : 'ใบปะหน้า';
+    showToast('[Odoo] คลิก ' + labelText + '…');
     var labelItem = await waitFor(
       '.dropdown-menu a, .dropdown-menu .dropdown-item, li a',
-      'ใบปะหน้า', 4000
+      labelText, 4000, true
     );
     await sleep(jitter(J.confirm));
     labelItem.click();
@@ -770,11 +778,13 @@
 
   async function runOdoo(orderNumber) {
     try {
+      // MZS-orders ใช้ report "ใบปะหน้า Website" แทน "ใบปะหน้า" — ตัดสินจาก format ที่สแกน
+      var useWebsiteLabel = /^MZS-/.test(orderNumber);
       var path = location.pathname;
       if (/^\/odoo\/sales\/\d+/.test(path)) {
-        await odooPhase2();
+        await odooPhase2(useWebsiteLabel);
       } else if (/^\/odoo\/sales(\?|$)/.test(path)) {
-        await odooPhase1(orderNumber);
+        await odooPhase1(orderNumber, useWebsiteLabel);
       }
       // หน้าอื่นที่ไม่ใช่ Sales (เช่น /odoo dashboard) → ไม่ทำอะไร เงียบสนิท
       // (ไม่ navigate, ไม่ toast). script @match ครอบ /odoo* ทั้งหมดเพื่อให้โหลด
