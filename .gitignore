@@ -13,3 +13,9 @@ crop_config.json
 *.pt
 snapshots/
 สูตร upload เข้า githup.txt
+
+# Office lock files / build previews / scratch (2026-07-02)
+~$*
+kernel.errors.txt
+manual_preview/
+manual-html-preview.png

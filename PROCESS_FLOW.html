@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>AI Sachet Counter — Process Flow Diagram</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', 'Sarabun', 'Tahoma', system-ui, -apple-system, sans-serif;
+    background: #eef1f5;
+    color: #1a1a1a;
+    line-height: 1.5;
+  }
+  header {
+    background: linear-gradient(135deg, #1565C0 0%, #0D47A1 100%);
+    color: white;
+    padding: 28px 40px;
+    border-bottom: 4px solid #FFC107;
+  }
+  header h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.3px; }
+  header p { font-size: 13px; opacity: 0.88; margin-top: 6px; }
+  header .meta { font-size: 11px; opacity: 0.7; margin-top: 10px; font-family: 'Consolas', monospace; }
+  header nav { margin-top: 12px; display: flex; gap: 14px; font-size: 12px; }
+  header nav a {
+    color: #FFEB3B;
+    text-decoration: none;
+    border-bottom: 1px dotted #FFEB3B;
+    padding-bottom: 1px;
+  }
+  header nav a:hover { color: white; border-bottom-color: white; }
+  header nav .current { color: white; border-bottom: 1px solid white; }
+
+  .container { max-width: 1340px; margin: 0 auto; padding: 24px; }
+
+  .legend {
+    background: white;
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .legend h2 { font-size: 14px; margin-bottom: 12px; color: #333; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  .legend-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px 18px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: #333;
+  }
+  .legend-item svg {
+    flex-shrink: 0;
+    width: 56px;
+    height: 38px;
+  }
+  .legend-item strong { font-weight: 600; color: #111; }
+  .legend-item span { color: #555; }
+  .arrow-legend { margin-top: 12px; display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px; color: #444; }
+  .arrow-legend .item { display: flex; align-items: center; gap: 8px; }
+  .arrow-legend svg { width: 56px; height: 12px; }
+
+  .controls {
+    background: white;
+    border-radius: 8px;
+    padding: 12px 18px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .controls .hint {
+    font-size: 12px;
+    color: #555;
+    margin-right: auto;
+  }
+  .controls .hint kbd {
+    background: #f0f2f5;
+    border: 1px solid #d0d4da;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+    color: #333;
+  }
+  .controls button {
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 14px;
+    border: 1px solid #c0c4ca;
+    border-radius: 6px;
+    background: #f7f8fa;
+    color: #333;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .controls button:hover {
+    background: #1565C0;
+    color: white;
+    border-color: #1565C0;
+  }
+  .controls button.danger:hover { background: #C62828; border-color: #C62828; }
+  .controls .badge {
+    font-size: 11px;
+    color: #2E7D32;
+    background: #E8F5E9;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+  }
+  .controls .badge.dirty { color: #E65100; background: #FFF3E0; }
+
+  /* Editable text styles inside foreignObject */
+  .ed {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.18;
+    padding: 2px 6px;
+    outline: none;
+    white-space: pre-wrap;
+    cursor: text;
+    user-select: text;
+    font-family: 'Segoe UI', 'Sarabun', 'Tahoma', system-ui, sans-serif;
+    overflow: hidden;
+    box-sizing: border-box;
+    border-radius: 3px;
+  }
+  .ed:hover { background: rgba(21, 101, 192, 0.06); }
+  .ed:focus { background: rgba(255, 235, 59, 0.25); box-shadow: 0 0 0 2px #FBC02D inset; }
+
+  .diagram-wrap {
+    background: white;
+    border-radius: 8px;
+    padding: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    overflow-x: auto;
+  }
+  svg.flowchart {
+    display: block;
+    margin: 0 auto;
+    font-family: inherit;
+  }
+
+  footer {
+    text-align: center;
+    color: #888;
+    font-size: 12px;
+    padding: 20px;
+    font-family: 'Consolas', monospace;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Sachet Counter — Process Flow Diagram</h1>
+  <p>Swimlane flowchart : <strong>Launcher auto-update</strong> → <strong>Runtime counting flow</strong> (happy path + main decision branches)</p>
+  <div class="meta">ISO 5807 / ANSI 1970 symbols  •  source : PROJECT_CONTEXT.md (2026-05-30)  •  repo : copter-TDFB/PJ-AI-count-sachet-in-packing-line</div>
+  <nav>
+    <span class="current">Launcher + Counting flow (this page)</span>
+    <a href="PROCESS_FLOW_BRIDGE.html">Bridge → Platform flow (PROCESS_FLOW_BRIDGE.html) →</a>
+  </nav>
+</header>
+
+<div class="container">
+  <section class="legend">
+    <h2>สัญลักษณ์มาตรฐาน · Standard Flowchart Symbols</h2>
+    <div class="legend-grid" id="legend"></div>
+    <div class="arrow-legend">
+      <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="50" y2="6" stroke="#333" stroke-width="1.8"/><polygon points="50,2 58,6 50,10" fill="#333"/></svg><span>Flow ปกติ</span></div>
+      <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="58" y2="6" stroke="#444" stroke-width="1.8"/><polygon points="2,2 -6,6 2,10" fill="#444" transform="translate(8,0)"/><polygon points="50,2 58,6 50,10" fill="#444"/></svg><span>Bidirectional (req/response)</span></div>
+      <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="50" y2="6" stroke="#C62828" stroke-width="1.8" stroke-dasharray="6 4"/><polygon points="50,2 58,6 50,10" fill="#C62828"/></svg><span>Loop-back / NO branch</span></div>
+      <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="50" y2="6" stroke="#2E7D32" stroke-width="1.8"/><polygon points="50,2 58,6 50,10" fill="#2E7D32"/></svg><span>Fire-and-forget</span></div>
+    </div>
+  </section>
+
+  <div class="controls">
+    <span class="hint">💡 คลิกข้อความใดก็ได้เพื่อแก้ — บันทึกอัตโนมัติลง browser  •  กด <kbd>Esc</kbd> เพื่อยกเลิก</span>
+    <span id="editBadge" class="badge">บันทึกแล้ว</span>
+    <button onclick="exportEdits()">💾 Export JSON</button>
+    <button onclick="importEdits()">📂 Import JSON</button>
+    <button class="danger" onclick="resetEdits()">↺ คืนค่าเดิมทั้งหมด</button>
+  </div>
+
+  <div class="diagram-wrap">
+    <svg class="flowchart" id="chart" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+
+<footer>PROCESS_FLOW.html · generated from PROJECT_CONTEXT.md</footer>
+
+<script>
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+// ===== Editable text persistence =====
+const EDIT_KEY = 'flow-edit:';
+function loadEdit(id, fallback) {
+  const v = localStorage.getItem(EDIT_KEY + id);
+  return v !== null ? v : fallback;
+}
+function saveEdit(id, value, fallback) {
+  if (value === fallback) localStorage.removeItem(EDIT_KEY + id);
+  else localStorage.setItem(EDIT_KEY + id, value);
+  updateBadge();
+}
+function updateBadge() {
+  const badge = document.getElementById('editBadge');
+  if (!badge) return;
+  let count = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    if (localStorage.key(i).startsWith(EDIT_KEY)) count++;
+  }
+  if (count === 0) {
+    badge.textContent = 'ค่าเดิม';
+    badge.classList.remove('dirty');
+  } else {
+    badge.textContent = `แก้แล้ว ${count} จุด`;
+    badge.classList.add('dirty');
+  }
+}
+
+// Place an editable text inside an SVG foreignObject
+function editText(parent, x, y, w, h, id, defaultText, opts = {}) {
+  const fo = el('foreignObject', { x, y, width: w, height: h }, parent);
+  const div = document.createElement('div');
+  div.className = 'ed';
+  div.setAttribute('contenteditable', 'plaintext-only');
+  div.dataset.eid = id;
+  div.dataset.def = defaultText;
+  div.style.fontSize = (opts.fontSize || 11.5) + 'px';
+  div.style.fontWeight = opts.fontWeight || 600;
+  div.style.color = opts.color || '#1a1a1a';
+  if (opts.letterSpacing) div.style.letterSpacing = opts.letterSpacing;
+  div.textContent = loadEdit(id, defaultText);
+
+  div.addEventListener('blur', () => {
+    saveEdit(id, div.textContent, defaultText);
+  });
+  div.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') {
+      div.textContent = defaultText;
+      div.blur();
+    }
+    if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault();
+      div.blur();
+    }
+  });
+  fo.appendChild(div);
+  return fo;
+}
+
+// Export / import / reset
+function exportEdits() {
+  const edits = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k.startsWith(EDIT_KEY)) edits[k.slice(EDIT_KEY.length)] = localStorage.getItem(k);
+  }
+  const blob = new Blob([JSON.stringify(edits, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().slice(0,16).replace(':','-');
+  a.href = url; a.download = `flow-edits-${ts}.json`; a.click();
+  URL.revokeObjectURL(url);
+}
+function importEdits() {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.json,application/json';
+  inp.onchange = async () => {
+    const f = inp.files[0]; if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      for (const [k, v] of Object.entries(data)) {
+        localStorage.setItem(EDIT_KEY + k, v);
+      }
+      location.reload();
+    } catch (e) { alert('ไฟล์ไม่ถูกต้อง: ' + e.message); }
+  };
+  inp.click();
+}
+function resetEdits() {
+  if (!confirm('ลบการแก้ไขทั้งหมดและกลับไปใช้ค่าเดิม?')) return;
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k.startsWith(EDIT_KEY)) keys.push(k);
+  }
+  keys.forEach(k => localStorage.removeItem(k));
+  location.reload();
+}
+
+// ===== Lane layout =====
+const lanes = [
+  { id: 'user',   name: 'USER',              x: 0,    w: 200, bg: '#FFFBF0', strip: '#F57F17' },
+  { id: 'launch', name: 'LAUNCHER',          x: 200,  w: 240, bg: '#FFF4E5', strip: '#EF6C00' },
+  { id: 'app',    name: 'MAIN APP (UI)',     x: 440,  w: 280, bg: '#EBF4FF', strip: '#1565C0' },
+  { id: 'worker', name: 'WORKERS (Threads)', x: 720,  w: 300, bg: '#F3EBFF', strip: '#6A1B9A' },
+  { id: 'ext',    name: 'EXTERNAL',          x: 1020, w: 240, bg: '#EBF7EE', strip: '#2E7D32' },
+];
+const TOTAL_W = 1260;
+const TOTAL_H = 2730;
+const HEADER_H = 60;
+const NODE_W = 190;
+const NODE_H_2 = 66;
+const NODE_H_3 = 82;
+const NODE_H_4 = 98;
+const DEC_W = 210;
+const DEC_H = 110;
+
+const laneCenter = i => lanes[i].x + lanes[i].w / 2;
+const laneLeft   = i => lanes[i].x;
+const laneRight  = i => lanes[i].x + lanes[i].w;
+
+// Dedicated gutters for loop-back arrows
+const GUTTER_LAUNCH_R = laneRight(1) - 18;   // x=422 — vertical channel inside right of Launcher (empty below y=720)
+const GUTTER_WORKER_R = laneRight(3) - 14;   // x=1006 — vertical channel inside right of Workers
+
+// ===== Node definitions =====
+// [id, lane, y, type, label, optional height override]
+const nodeDefs = [
+  ['start',     0,  100,  'terminator',  'User เปิด\nlauncher.exe'],
+
+  // ── Launcher auto-update ──
+  ['readVer',   1,  100,  'process',     'อ่าน app/version.txt\n→ local_ver'],
+  ['fetchRel',  1,  230,  'data',        'GET latest release\n(SSL: truststore→certifi)'],
+  ['gh',        4,  230,  'document',    'GitHub\nReleases API'],
+  ['cmpVer',    1,  360,  'decision',    'remote >\nlocal ?'],
+  ['download',  1,  540,  'process',     'Download .zip →\nextract → replace app/'],
+  ['writeVer',  1,  660,  'process',     'Write app/version.txt\n(UTF-8 no BOM)'],
+  ['startApp',  1,  780,  'process',     'Launch\napp/odoo_counter.exe'],
+
+  // ── Main app startup ──
+  ['init',      2,  910,  'terminator',  'MainWindow init'],
+  ['loadModel', 3,  1030, 'subprocess',  'CameraWorker:\nload YOLO + warmup\n+ open camera (OFF)', NODE_H_3],
+  ['preWarm',   3,  1170, 'subprocess',  'Pre-warm OdooConn\n(daemon thread)'],
+  ['odoo1',     4,  1170, 'cylinder',    'Odoo XML-RPC\n/common login'],
+
+  // ── Ready / barcode scan ──
+  ['ready',     2,  1300, 'delay',       'รอ scan barcode'],
+  ['scan',      0,  1300, 'manualInput', 'User สแกน barcode\n+ Enter'],
+  ['qPicking',  3,  1430, 'subprocess',  'BarcodeWorker:\nsearch picking + moves\n+ lot/exp', NODE_H_3],
+  ['odoo2',     4,  1430, 'cylinder',    'Odoo:\nstock.picking,\nstock.move.line,\nstock.lot', NODE_H_4],
+  ['found',     3,  1590, 'decision',    'เจอ picking\n+ มี moves 3g\nที่ supported ?'],
+
+  // ── Counting loop ──
+  ['popup',     2,  1760, 'process',     'CounterPanel.popup()\nแสดง product cards\n+ enable inference', NODE_H_3],
+  ['place',     0,  1900, 'manualInput', 'พนักงาน หยิบซอง 3g\nวางในกรอบนับ (crop zone)\nทีละใบจนครบ order', NODE_H_3],
+  ['infer',     3,  1900, 'subprocess',  'CameraWorker:\nframe → YOLO OBB\n→ count by class', NODE_H_3],
+  ['compare',   2,  2040, 'process',     'CounterPanel:\nเทียบ counted vs demand'],
+  ['exact',     2,  2160, 'decision',    'ครบทุก product ?\nไม่มีเกิน/นอก order ?'],
+
+  // ── Branch NO of exact ──
+  ['wrong',     3,  2330, 'process',     'เล่น ผิด.mp3\n+ shake + alert'],
+
+  // ── Success path (YES) ──
+  ['stable',    2,  2330, 'delay',       'Wait counts\nstable ≥ 0.5s'],
+  ['snapshot',  3,  2460, 'subprocess',  'Save snapshot\n→ snapshots/*.png'],
+  ['correct',   2,  2460, 'process',     'เล่น ถูก.mp3 + toast\n+ auto-hide 1.5s'],
+  ['save',      3,  2590, 'subprocess',  'OdooSaveWorker\n(fire-and-forget)'],
+  ['odoo3',     4,  2590, 'cylinder',    'Odoo:\npicking.message_post'],
+  ['reset',     2,  2590, 'process',     'Disable inference\n+ reset to ready'],
+];
+
+// Build nodeMap
+const N = {};
+for (const def of nodeDefs) {
+  const [id, lane, y, type, label, hOverride] = def;
+  let h;
+  if (type === 'decision') h = DEC_H;
+  else if (hOverride) h = hOverride;
+  else {
+    const lines = label.split('\n').length;
+    h = lines >= 4 ? NODE_H_4 : lines === 3 ? NODE_H_3 : NODE_H_2;
+  }
+  const w = type === 'decision' ? DEC_W : NODE_W;
+  N[id] = { id, lane, y, type, label, w, h, cx: laneCenter(lane), cy: y + h/2 };
+}
+
+// ===== SVG setup =====
+const svg = document.getElementById('chart');
+svg.setAttribute('viewBox', `0 0 ${TOTAL_W} ${TOTAL_H}`);
+svg.setAttribute('width', '100%');
+svg.style.maxWidth = TOTAL_W + 'px';
+
+// Defs: arrowheads
+const defs = el('defs', {}, svg);
+function defArrow(id, color) {
+  const m = el('marker', {
+    id, viewBox: '0 0 10 10', refX: 9, refY: 5,
+    markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse'
+  }, defs);
+  el('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: color }, m);
+}
+function defArrowBack(id, color) {
+  const m = el('marker', {
+    id, viewBox: '0 0 10 10', refX: 1, refY: 5,
+    markerWidth: 7, markerHeight: 7, orient: 'auto'
+  }, defs);
+  el('path', { d: 'M 10 0 L 0 5 L 10 10 z', fill: color }, m);
+}
+defArrow('arrow',     '#333');
+defArrow('arrowLoop', '#C62828');
+defArrow('arrowOk',   '#2E7D32');
+defArrowBack('arrowB',     '#333');
+
+// ===== Lanes =====
+const laneGroup = el('g', { id: 'lanes' }, svg);
+for (let i = 0; i < lanes.length; i++) {
+  const ln = lanes[i];
+  el('rect', {
+    x: ln.x, y: 0, width: ln.w, height: TOTAL_H,
+    fill: ln.bg, stroke: '#d0d4da', 'stroke-width': 1
+  }, laneGroup);
+  // header strip
+  el('rect', {
+    x: ln.x, y: 0, width: ln.w, height: HEADER_H,
+    fill: ln.strip, stroke: 'none'
+  }, laneGroup);
+  // header text (editable)
+  editText(laneGroup, ln.x, 0, ln.w, HEADER_H, 'lane:' + ln.id, ln.name, {
+    fontSize: 14, fontWeight: 700, color: 'white', letterSpacing: '1px'
+  });
+}
+
+// ===== Shape drawing =====
+function drawShape(parent, node) {
+  const { type, cx, y, w, h, label } = node;
+  const x = cx - w/2;
+  let textFill = '#1a1a1a';
+
+  switch (type) {
+    case 'terminator': {
+      el('rect', {
+        x, y, width: w, height: h, rx: h/2, ry: h/2,
+        fill: '#2E7D32', stroke: '#1B5E20', 'stroke-width': 2
+      }, parent);
+      textFill = 'white';
+      break;
+    }
+    case 'process': {
+      el('rect', {
+        x, y, width: w, height: h,
+        fill: '#FFFFFF', stroke: '#333', 'stroke-width': 1.6
+      }, parent);
+      break;
+    }
+    case 'decision': {
+      el('polygon', {
+        points: `${cx},${y} ${x+w},${y+h/2} ${cx},${y+h} ${x},${y+h/2}`,
+        fill: '#FFF59D', stroke: '#F57F17', 'stroke-width': 1.8
+      }, parent);
+      break;
+    }
+    case 'data': {
+      const sl = 14;
+      el('polygon', {
+        points: `${x+sl},${y} ${x+w},${y} ${x+w-sl},${y+h} ${x},${y+h}`,
+        fill: '#B3E5FC', stroke: '#0277BD', 'stroke-width': 1.6
+      }, parent);
+      break;
+    }
+    case 'manualInput': {
+      el('polygon', {
+        points: `${x},${y+12} ${x+w},${y} ${x+w},${y+h} ${x},${y+h}`,
+        fill: '#FFE082', stroke: '#FF8F00', 'stroke-width': 1.6
+      }, parent);
+      break;
+    }
+    case 'subprocess': {
+      const g = el('g', {}, parent);
+      el('rect', { x, y, width: w, height: h, fill: '#FFFFFF', stroke: '#333', 'stroke-width': 1.6 }, g);
+      el('line', { x1: x+9, y1: y, x2: x+9, y2: y+h, stroke: '#333', 'stroke-width': 1.6 }, g);
+      el('line', { x1: x+w-9, y1: y, x2: x+w-9, y2: y+h, stroke: '#333', 'stroke-width': 1.6 }, g);
+      break;
+    }
+    case 'delay': {
+      const r = h/2;
+      el('path', {
+        d: `M ${x},${y} L ${x+w-r},${y} A ${r},${r} 0 0 1 ${x+w-r},${y+h} L ${x},${y+h} Z`,
+        fill: '#FFCCBC', stroke: '#BF360C', 'stroke-width': 1.6
+      }, parent);
+      break;
+    }
+    case 'document': {
+      const wave = 8;
+      el('path', {
+        d: `M ${x},${y} L ${x+w},${y} L ${x+w},${y+h-wave}
+            Q ${x+3*w/4},${y+h+wave} ${x+w/2},${y+h-wave/2}
+            Q ${x+w/4},${y+h-wave*1.5} ${x},${y+h-wave/2} Z`,
+        fill: '#FFCC80', stroke: '#E65100', 'stroke-width': 1.6
+      }, parent);
+      break;
+    }
+    case 'cylinder': {
+      const g = el('g', {}, parent);
+      const ry = 8;
+      el('path', {
+        d: `M ${x},${y+ry} L ${x},${y+h-ry} A ${w/2},${ry} 0 0 0 ${x+w},${y+h-ry} L ${x+w},${y+ry} Z`,
+        fill: '#A5D6A7', stroke: '#1B5E20', 'stroke-width': 1.6
+      }, g);
+      el('ellipse', {
+        cx: x+w/2, cy: y+ry, rx: w/2, ry,
+        fill: '#A5D6A7', stroke: '#1B5E20', 'stroke-width': 1.6
+      }, g);
+      break;
+    }
+  }
+
+  // Text (editable)
+  if (node.id !== undefined) {
+    editText(parent, x, y, w, h, 'node:' + node.id, label, {
+      fontSize: type === 'decision' ? 11 : 11.5,
+      fontWeight: 600,
+      color: textFill,
+    });
+  } else {
+    // Legend / non-interactive — render as static SVG text
+    const lines = label.split('\n');
+    const lineH = 13;
+    const startY = y + h/2 - (lines.length - 1) * lineH / 2 + 4;
+    const text = el('text', {
+      x: cx, y: startY,
+      'text-anchor': 'middle',
+      'font-size': type === 'decision' ? 11 : 11.5,
+      'font-weight': 600,
+      fill: textFill
+    }, parent);
+    lines.forEach((line, i) => {
+      const ts = el('tspan', { x: cx, dy: i === 0 ? 0 : lineH }, text);
+      ts.textContent = line;
+    });
+  }
+}
+
+// ===== Anchor / path helpers =====
+function anchor(id, side) {
+  const n = N[id];
+  switch (side) {
+    case 't': return { x: n.cx, y: n.y };
+    case 'b': return { x: n.cx, y: n.y + n.h };
+    case 'l': return { x: n.cx - n.w/2, y: n.y + n.h/2 };
+    case 'r': return { x: n.cx + n.w/2, y: n.y + n.h/2 };
+  }
+}
+
+function buildPath(points) {
+  let d = `M ${points[0][0]},${points[0][1]}`;
+  for (let i = 1; i < points.length; i++) {
+    d += ` L ${points[i][0]},${points[i][1]}`;
+  }
+  return d;
+}
+
+function autoPoints(a, b, fs, ts, via) {
+  const pts = [[a.x, a.y]];
+  if (via) {
+    for (const v of via) pts.push(v);
+  } else {
+    // Orthogonal auto-routing
+    if (Math.abs(a.x - b.x) < 0.5 || Math.abs(a.y - b.y) < 0.5) {
+      // straight
+    } else if (fs === 'b' && ts === 't') {
+      const m = (a.y + b.y) / 2;
+      pts.push([a.x, m], [b.x, m]);
+    } else if (fs === 't' && ts === 'b') {
+      const m = (a.y + b.y) / 2;
+      pts.push([a.x, m], [b.x, m]);
+    } else if ((fs === 'r' && ts === 'l') || (fs === 'l' && ts === 'r')) {
+      const m = (a.x + b.x) / 2;
+      pts.push([m, a.y], [m, b.y]);
+    } else if ((fs === 'b' && ts === 'l') || (fs === 'b' && ts === 'r')) {
+      pts.push([a.x, b.y]);
+    } else if ((fs === 't' && ts === 'l') || (fs === 't' && ts === 'r')) {
+      pts.push([a.x, b.y]);
+    } else if ((fs === 'r' && ts === 't') || (fs === 'l' && ts === 't')) {
+      pts.push([b.x, a.y]);
+    } else if ((fs === 'r' && ts === 'b') || (fs === 'l' && ts === 'b')) {
+      pts.push([b.x, a.y]);
+    }
+  }
+  pts.push([b.x, b.y]);
+  return pts;
+}
+
+function pickLabelPos(points) {
+  let maxLen = 0;
+  let best = null;
+  for (let i = 0; i < points.length - 1; i++) {
+    const [x1, y1] = points[i];
+    const [x2, y2] = points[i+1];
+    const len = Math.hypot(x2-x1, y2-y1);
+    if (len > maxLen) {
+      maxLen = len;
+      best = {
+        x: (x1+x2)/2,
+        y: (y1+y2)/2,
+        isVertical: Math.abs(x2-x1) < 1,
+        isHorizontal: Math.abs(y2-y1) < 1,
+      };
+    }
+  }
+  return best;
+}
+
+// ===== Edge definitions =====
+// fs/ts = from-side / to-side ('t' top, 'b' bottom, 'l' left, 'r' right)
+// label = arrow label text (multi-line via \n)
+// via = array of [x, y] waypoints (optional)
+// style = 'loop' (red dashed), 'ok' (green), 'bi' (bidirectional)
+const edges = [
+  // ── Launcher phase ──
+  { from: 'start',    fs: 'r', to: 'readVer',  ts: 'l' },
+  { from: 'readVer',  fs: 'b', to: 'fetchRel', ts: 't' },
+  { from: 'fetchRel', fs: 'r', to: 'gh',       ts: 'l', label: 'GET / asset url', style: 'bi' },
+  { from: 'fetchRel', fs: 'b', to: 'cmpVer',   ts: 't' },
+
+  // cmpVer YES: down to download
+  { from: 'cmpVer',   fs: 'b', to: 'download', ts: 't', label: 'YES' },
+
+  // cmpVer NO: route via LEFT side of Launcher lane down to startApp
+  { from: 'cmpVer',   fs: 'l', to: 'startApp', ts: 'l',
+    via: [
+      [laneLeft(1) + 18, N.cmpVer.cy],
+      [laneLeft(1) + 18, N.startApp.cy],
+    ],
+    label: 'NO\nskip update',
+    // default midpoint (y≈614) clips the top-left corner of `download` (y 540-606) —
+    // pin the label into the empty gap between cmpVer's bottom (470) and download's top (540)
+    labelAt: [laneLeft(1) + 18, (N.cmpVer.y + N.cmpVer.h + N.download.y) / 2]
+  },
+
+  { from: 'download', fs: 'b', to: 'writeVer', ts: 't' },
+  { from: 'writeVer', fs: 'b', to: 'startApp', ts: 't' },
+
+  // ── Startup ──
+  { from: 'startApp', fs: 'r', to: 'init',     ts: 'l' },
+  { from: 'init',     fs: 'r', to: 'loadModel',ts: 'l' },
+  { from: 'loadModel',fs: 'b', to: 'preWarm',  ts: 't' },
+  { from: 'preWarm',  fs: 'r', to: 'odoo1',    ts: 'l', label: 'auth → uid', style: 'bi' },
+  { from: 'preWarm',  fs: 'l', to: 'ready',    ts: 'r' },
+
+  // ── Scan loop ──
+  { from: 'scan',     fs: 'r', to: 'ready',    ts: 'l', label: 'barcode event' },
+  { from: 'ready',    fs: 'r', to: 'qPicking', ts: 'l', label: 'spawn worker' },
+  // gap between qPicking and odoo2 is only 80px; shortened label + centered labelAt
+  // keeps it inside the gap instead of overlapping both boxes
+  { from: 'qPicking', fs: 'r', to: 'odoo2',    ts: 'l', label: 'search_read', style: 'bi',
+    labelAt: [(N.qPicking.cx + N.qPicking.w/2 + N.odoo2.cx - N.odoo2.w/2) / 2, (N.qPicking.cy + N.odoo2.cy) / 2] },
+  { from: 'qPicking', fs: 'b', to: 'found',    ts: 't' },
+
+  // Decision found
+  { from: 'found',    fs: 'l', to: 'popup',    ts: 'r', label: 'YES',
+    via: [
+      [(N.found.cx - DEC_W/2 + N.popup.cx + N.popup.w/2) / 2, N.found.cy],
+      [(N.found.cx - DEC_W/2 + N.popup.cx + N.popup.w/2) / 2, N.popup.cy],
+    ]
+  },
+  // Loop: found NO → ready (via right gutter of WORKERS)
+  { from: 'found',    fs: 'r', to: 'ready',    ts: 'b',
+    via: [
+      [GUTTER_WORKER_R, N.found.cy],
+      [GUTTER_WORKER_R, N.ready.y + N.ready.h + 24],
+      [N.ready.cx, N.ready.y + N.ready.h + 24],
+    ],
+    label: 'NO — แสดง error\n+ reset',
+    style: 'loop',
+    // default midpoint (x≈793) sits right where this line crosses the "spawn worker"
+    // label's vertical segment (x=725) — push it further right along the same
+    // horizontal run so the two label boxes stop overlapping
+    labelAt: [N.ready.cx + 300, N.ready.y + N.ready.h + 24]
+  },
+
+  // ── Counting ──
+  { from: 'popup',    fs: 'r', to: 'infer',    ts: 'l', label: 'เปิด inference loop' },
+  { from: 'popup',    fs: 'l', to: 'place',    ts: 'r', label: 'แสดงจำนวนที่ต้องนับ' },
+  { from: 'place',    fs: 'r', to: 'infer',    ts: 'l', label: 'วางซอง → กล้องจับภาพ' },
+  { from: 'infer',    fs: 'l', to: 'compare',  ts: 'r' },
+  { from: 'compare',  fs: 'b', to: 'exact',    ts: 't' },
+
+  // Decision exact
+  { from: 'exact',    fs: 'r', to: 'wrong',    ts: 'l', label: 'NO',
+    via: [
+      [(N.exact.cx + DEC_W/2 + N.wrong.cx - N.wrong.w/2) / 2, N.exact.cy],
+      [(N.exact.cx + DEC_W/2 + N.wrong.cx - N.wrong.w/2) / 2, N.wrong.cy],
+    ]
+  },
+  // Loop: wrong → infer (via right gutter of WORKERS, but shorter than found-loop)
+  { from: 'wrong',    fs: 'r', to: 'infer',    ts: 'r',
+    via: [
+      [GUTTER_WORKER_R, N.wrong.cy],
+      [GUTTER_WORKER_R, N.infer.cy],
+    ],
+    label: 'loop\nนับใหม่',
+    style: 'loop'
+  },
+  { from: 'exact',    fs: 'b', to: 'stable',   ts: 't', label: 'YES' },
+
+  // ── Success path ──
+  { from: 'stable',   fs: 'r', to: 'snapshot', ts: 'l', label: 'snapshot_requested' },
+  { from: 'stable',   fs: 'b', to: 'correct',  ts: 't' },
+  { from: 'correct',  fs: 'r', to: 'save',     ts: 'l', label: 'hideEvent\n→ post note' },
+  // no label: the 80px gap can't fit "message_post" without clipping both boxes,
+  // and the target node already reads "Odoo: picking.message_post"
+  { from: 'save',     fs: 'r', to: 'odoo3',    ts: 'l', style: 'ok' },
+  { from: 'correct',  fs: 'b', to: 'reset',    ts: 't' },
+
+  // Loop: reset → ready (via right gutter of LAUNCHER — empty channel below y=720)
+  { from: 'reset',    fs: 'l', to: 'ready',    ts: 'b',
+    via: [
+      [GUTTER_LAUNCH_R, N.reset.cy],
+      [GUTTER_LAUNCH_R, N.ready.y + N.ready.h + 36],
+      [N.ready.cx, N.ready.y + N.ready.h + 36],
+    ],
+    label: 'รอ scan ใบใหม่',
+    style: 'loop'
+  },
+];
+
+// ===== Render edges =====
+const edgeLayer = el('g', { id: 'edges' }, svg);
+const edgeLabelLayer = el('g', { id: 'edge-labels' }, svg);
+
+for (const e of edges) {
+  const a = anchor(e.from, e.fs);
+  const b = anchor(e.to, e.ts);
+  const points = autoPoints(a, b, e.fs, e.ts, e.via);
+  const d = buildPath(points);
+
+  let stroke = '#333', dash = 'none';
+  const attrs = {
+    d, fill: 'none', 'stroke-width': 1.7,
+    'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+    'marker-end': 'url(#arrow)'
+  };
+  if (e.style === 'loop') {
+    stroke = '#C62828'; dash = '6 4';
+    attrs['marker-end'] = 'url(#arrowLoop)';
+  } else if (e.style === 'ok') {
+    stroke = '#2E7D32';
+    attrs['marker-end'] = 'url(#arrowOk)';
+  } else if (e.style === 'bi') {
+    attrs['marker-start'] = 'url(#arrowB)';
+  }
+  attrs.stroke = stroke;
+  attrs['stroke-dasharray'] = dash;
+  el('path', attrs, edgeLayer);
+
+  if (e.label) {
+    const pos = e.labelAt ? { x: e.labelAt[0], y: e.labelAt[1] } : pickLabelPos(points);
+    if (!pos) continue;
+    const lx = pos.x, ly = pos.y;
+    // Load actual text (may be edited) to size the background correctly
+    const edgeId = 'edge:' + e.from + '>' + e.to;
+    const actual = loadEdit(edgeId, e.label);
+    const lines = actual.split('\n');
+    const lh = 13;
+    const maxLen = Math.max(...lines.map(l => l.length));
+    const bw = Math.max(40, maxLen * 6.4 + 14);
+    const bh = lines.length * lh + 8;
+    el('rect', {
+      x: lx - bw/2, y: ly - bh/2, width: bw, height: bh,
+      fill: '#fff', stroke: stroke, 'stroke-width': 0.8,
+      opacity: 0.95, rx: 4
+    }, edgeLabelLayer);
+    editText(edgeLabelLayer, lx - bw/2, ly - bh/2, bw, bh, edgeId, e.label, {
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: stroke,
+    });
+  }
+}
+
+// ===== Render nodes =====
+const nodeLayer = el('g', { id: 'nodes' }, svg);
+for (const id in N) drawShape(nodeLayer, N[id]);
+
+// ===== Legend =====
+const legendItems = [
+  { type: 'terminator',   title: 'Terminator',         desc: 'จุดเริ่ม / จบ flow' },
+  { type: 'process',      title: 'Process',            desc: 'ขั้นตอนทำงานปกติ' },
+  { type: 'decision',     title: 'Decision',           desc: 'จุดตัดสินใจ (YES/NO)' },
+  { type: 'data',         title: 'Data / I-O',         desc: 'รับ/ส่งข้อมูล' },
+  { type: 'manualInput',  title: 'Manual Input',       desc: 'user ป้อนข้อมูลเอง' },
+  { type: 'subprocess',   title: 'Predefined Process', desc: 'subroutine / worker thread' },
+  { type: 'delay',        title: 'Delay / Wait',       desc: 'รอ event หรือเวลา' },
+  { type: 'document',     title: 'Document',           desc: 'เอกสาร / API resource' },
+  { type: 'cylinder',     title: 'Database',           desc: 'ระบบภายนอก / DB' },
+];
+const legend = document.getElementById('legend');
+for (const li of legendItems) {
+  const wrap = document.createElement('div');
+  wrap.className = 'legend-item';
+  const svgL = document.createElementNS(SVG_NS, 'svg');
+  svgL.setAttribute('viewBox', '0 0 70 40');
+  const fakeNode = {
+    type: li.type, cx: 35, y: 6, w: 50, h: 28, label: '',
+  };
+  if (li.type === 'decision') { fakeNode.w = 50; fakeNode.h = 32; fakeNode.y = 4; }
+  drawShape(svgL, fakeNode);
+  wrap.appendChild(svgL);
+  const txt = document.createElement('div');
+  txt.innerHTML = `<strong>${li.title}</strong><br><span>${li.desc}</span>`;
+  wrap.appendChild(txt);
+  legend.appendChild(wrap);
+}
+
+// Initialise badge with current edit count
+updateBadge();
+</script>
+</body>
+</html>

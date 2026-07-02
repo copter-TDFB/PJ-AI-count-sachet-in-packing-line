@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>AI Sachet Counter — Barcode Bridge → Tampermonkey Platform Flow</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', 'Sarabun', 'Tahoma', system-ui, -apple-system, sans-serif;
+    background: #eef1f5;
+    color: #1a1a1a;
+    line-height: 1.5;
+  }
+  header {
+    background: linear-gradient(135deg, #6A1B9A 0%, #4A148C 100%);
+    color: white;
+    padding: 28px 40px;
+    border-bottom: 4px solid #FFC107;
+  }
+  header h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.3px; }
+  header p { font-size: 13px; opacity: 0.88; margin-top: 6px; }
+  header .meta { font-size: 11px; opacity: 0.7; margin-top: 10px; font-family: 'Consolas', monospace; }
+  header nav { margin-top: 12px; display: flex; gap: 14px; font-size: 12px; }
+  header nav a {
+    color: #FFEB3B;
+    text-decoration: none;
+    border-bottom: 1px dotted #FFEB3B;
+    padding-bottom: 1px;
+  }
+  header nav a:hover { color: white; border-bottom-color: white; }
+  header nav .current { color: white; border-bottom: 1px solid white; }
+
+  .container { max-width: 1740px; margin: 0 auto; padding: 24px; }
+
+  .legend {
+    background: white;
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .legend h2 { font-size: 14px; margin-bottom: 12px; color: #333; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  .legend-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px 18px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: #333;
+  }
+  .legend-item svg { flex-shrink: 0; width: 56px; height: 38px; }
+  .legend-item strong { font-weight: 600; color: #111; }
+  .legend-item span { color: #555; }
+  .arrow-legend { margin-top: 12px; display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px; color: #444; }
+  .arrow-legend .item { display: flex; align-items: center; gap: 8px; }
+  .arrow-legend svg { width: 56px; height: 12px; }
+
+  .controls {
+    background: white;
+    border-radius: 8px;
+    padding: 12px 18px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .controls .hint { font-size: 12px; color: #555; margin-right: auto; }
+  .controls .hint kbd {
+    background: #f0f2f5; border: 1px solid #d0d4da; border-radius: 3px;
+    padding: 1px 6px; font-family: 'Consolas', monospace; font-size: 11px; color: #333;
+  }
+  .controls button {
+    font-family: inherit; font-size: 12px; font-weight: 600;
+    padding: 7px 14px; border: 1px solid #c0c4ca; border-radius: 6px;
+    background: #f7f8fa; color: #333; cursor: pointer; transition: all 0.15s;
+  }
+  .controls button:hover { background: #6A1B9A; color: white; border-color: #6A1B9A; }
+  .controls button.danger:hover { background: #C62828; border-color: #C62828; }
+  .controls .badge {
+    font-size: 11px; color: #2E7D32; background: #E8F5E9;
+    padding: 4px 10px; border-radius: 12px; font-weight: 600;
+  }
+  .controls .badge.dirty { color: #E65100; background: #FFF3E0; }
+
+  .ed {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; line-height: 1.18;
+    padding: 2px 6px; outline: none;
+    white-space: pre-wrap; cursor: text; user-select: text;
+    font-family: 'Segoe UI', 'Sarabun', 'Tahoma', system-ui, sans-serif;
+    overflow: hidden; box-sizing: border-box; border-radius: 3px;
+  }
+  .ed:hover { background: rgba(106, 27, 154, 0.07); }
+  .ed:focus { background: rgba(255, 235, 59, 0.25); box-shadow: 0 0 0 2px #FBC02D inset; }
+
+  .diagram-wrap {
+    background: white; border-radius: 8px;
+    padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    overflow-x: auto;
+  }
+  svg.flowchart { display: block; margin: 0 auto; font-family: inherit; }
+
+  footer { text-align: center; color: #888; font-size: 12px; padding: 20px; font-family: 'Consolas', monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Sachet Counter — Barcode Bridge → Tampermonkey Platform Flow</h1>
+  <p>Swimlane flowchart : <strong>scan barcode</strong> → BarcodeWorker (Odoo lookup) → <strong>BarcodeBridgeWorker.broadcast(origin)</strong> → Tampermonkey <strong>detectPlatform → cross-tab relay</strong> → automation triggered (TikTok / Shopee / Odoo / Lazada)</p>
+  <div class="meta">ISO 5807 / ANSI 1970 symbols  •  source : odoo_counter_app.py + combined-auto-print.user.js v1.9  •  scope : happy path</div>
+  <nav>
+    <a href="PROCESS_FLOW.html">← Launcher + Counting flow (PROCESS_FLOW.html)</a>
+    <span class="current">Bridge → Platform flow (this page)</span>
+  </nav>
+</header>
+
+<div class="container">
+  <section class="legend">
+    <h2>สัญลักษณ์มาตรฐาน · Standard Flowchart Symbols</h2>
+    <div class="legend-grid" id="legend"></div>
+    <div class="arrow-legend">
+      <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="50" y2="6" stroke="#333" stroke-width="1.8"/><polygon points="50,2 58,6 50,10" fill="#333"/></svg><span>Flow ปกติ</span></div>
+      <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="58" y2="6" stroke="#444" stroke-width="1.8"/><polygon points="2,2 -6,6 2,10" fill="#444" transform="translate(8,0)"/><polygon points="50,2 58,6 50,10" fill="#444"/></svg><span>Bidirectional (req/response)</span></div>
+      <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="50" y2="6" stroke="#2E7D32" stroke-width="1.8"/><polygon points="50,2 58,6 50,10" fill="#2E7D32"/></svg><span>Fire-and-forget / Cross-tab</span></div>
+    </div>
+  </section>
+
+  <div class="controls">
+    <span class="hint">💡 คลิกข้อความใดก็ได้เพื่อแก้ — บันทึกอัตโนมัติลง browser  •  กด <kbd>Esc</kbd> เพื่อยกเลิก</span>
+    <span id="editBadge" class="badge">บันทึกแล้ว</span>
+    <button onclick="exportEdits()">💾 Export JSON</button>
+    <button onclick="importEdits()">📂 Import JSON</button>
+    <button class="danger" onclick="resetEdits()">↺ คืนค่าเดิมทั้งหมด</button>
+  </div>
+
+  <div class="diagram-wrap">
+    <svg class="flowchart" id="chart" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+
+<footer>PROCESS_FLOW_BRIDGE.html · generated from odoo_counter_app.py + combined-auto-print.user.js v1.9</footer>
+
+<script>
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+const EDIT_KEY = 'flow-bridge-edit:';
+function loadEdit(id, fallback) {
+  const v = localStorage.getItem(EDIT_KEY + id);
+  return v !== null ? v : fallback;
+}
+function saveEdit(id, value, fallback) {
+  if (value === fallback) localStorage.removeItem(EDIT_KEY + id);
+  else localStorage.setItem(EDIT_KEY + id, value);
+  updateBadge();
+}
+function updateBadge() {
+  const badge = document.getElementById('editBadge');
+  if (!badge) return;
+  let count = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    if (localStorage.key(i).startsWith(EDIT_KEY)) count++;
+  }
+  if (count === 0) { badge.textContent = 'ค่าเดิม'; badge.classList.remove('dirty'); }
+  else { badge.textContent = `แก้แล้ว ${count} จุด`; badge.classList.add('dirty'); }
+}
+
+function editText(parent, x, y, w, h, id, defaultText, opts = {}) {
+  const fo = el('foreignObject', { x, y, width: w, height: h }, parent);
+  const div = document.createElement('div');
+  div.className = 'ed';
+  div.setAttribute('contenteditable', 'plaintext-only');
+  div.dataset.eid = id;
+  div.dataset.def = defaultText;
+  div.style.fontSize = (opts.fontSize || 11.5) + 'px';
+  div.style.fontWeight = opts.fontWeight || 600;
+  div.style.color = opts.color || '#1a1a1a';
+  if (opts.letterSpacing) div.style.letterSpacing = opts.letterSpacing;
+  div.textContent = loadEdit(id, defaultText);
+  div.addEventListener('blur', () => saveEdit(id, div.textContent, defaultText));
+  div.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') { div.textContent = defaultText; div.blur(); }
+    if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); div.blur(); }
+  });
+  fo.appendChild(div);
+  return fo;
+}
+
+function exportEdits() {
+  const edits = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k.startsWith(EDIT_KEY)) edits[k.slice(EDIT_KEY.length)] = localStorage.getItem(k);
+  }
+  const blob = new Blob([JSON.stringify(edits, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().slice(0,16).replace(':','-');
+  a.href = url; a.download = `flow-bridge-edits-${ts}.json`; a.click();
+  URL.revokeObjectURL(url);
+}
+function importEdits() {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.json,application/json';
+  inp.onchange = async () => {
+    const f = inp.files[0]; if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      for (const [k, v] of Object.entries(data)) localStorage.setItem(EDIT_KEY + k, v);
+      location.reload();
+    } catch (e) { alert('ไฟล์ไม่ถูกต้อง: ' + e.message); }
+  };
+  inp.click();
+}
+function resetEdits() {
+  if (!confirm('ลบการแก้ไขทั้งหมดและกลับไปใช้ค่าเดิม?')) return;
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k.startsWith(EDIT_KEY)) keys.push(k);
+  }
+  keys.forEach(k => localStorage.removeItem(k));
+  location.reload();
+}
+
+// ===== Lane layout (wider BROWSER lane to fit 4 platform columns comfortably) =====
+const lanes = [
+  { id: 'user',    name: 'USER',                  x: 0,    w: 180, bg: '#FFFBF0', strip: '#F57F17' },
+  { id: 'app',     name: 'DESKTOP APP (UI)',      x: 180,  w: 240, bg: '#EBF4FF', strip: '#1565C0' },
+  { id: 'worker',  name: 'DESKTOP WORKERS',       x: 420,  w: 300, bg: '#F3EBFF', strip: '#6A1B9A' },
+  { id: 'browser', name: 'BROWSER (Tampermonkey)',x: 720,  w: 760, bg: '#FFF3F8', strip: '#AD1457' },
+  { id: 'ext',     name: 'EXTERNAL',              x: 1480, w: 220, bg: '#EBF7EE', strip: '#2E7D32' },
+];
+const TOTAL_W = 1700;
+const TOTAL_H = 1680;
+const HEADER_H = 60;
+const NODE_W   = 180;
+const NODE_W_S = 170;
+const NODE_H_2 = 66;
+const NODE_H_3 = 82;
+const DEC_W    = 210;
+const DEC_W_S  = 170;
+const DEC_H    = 100;
+const DEC_H_S  = 90;
+
+const laneCenter = i => lanes[i].x + lanes[i].w / 2;
+const laneLeft   = i => lanes[i].x;
+const laneRight  = i => lanes[i].x + lanes[i].w;
+
+// 4 sub-columns inside BROWSER lane: TikTok / Shopee / Odoo / Lazada
+const BROWSER_LEFT  = laneLeft(3);
+const BROWSER_RIGHT = laneRight(3);
+const BROWSER_MID   = (BROWSER_LEFT + BROWSER_RIGHT) / 2;
+const COL_W = (BROWSER_RIGHT - BROWSER_LEFT) / 4;            // 190
+const COL_TT_CX = BROWSER_LEFT + COL_W * 0.5;                // 815
+const COL_SH_CX = BROWSER_LEFT + COL_W * 1.5;                // 1005
+const COL_OD_CX = BROWSER_LEFT + COL_W * 2.5;                // 1195
+const COL_LZ_CX = BROWSER_LEFT + COL_W * 3.5;                // 1385
+
+// YES-route channels (vertical x positions that bypass GM storage)
+const Y_CH_TT = BROWSER_LEFT + 18;                           // 738 — left edge
+const Y_CH_SH = BROWSER_LEFT + COL_W;                        // 910 — between TT & SH
+const Y_CH_OD = BROWSER_LEFT + COL_W * 3;                    // 1290 — between OD & LZ
+const Y_CH_LZ = BROWSER_RIGHT - 18;                          // 1462 — right edge
+
+// ===== Node definitions =====
+// [id, lane, y, type, label, w?, h?, cx?]
+const nodeDefs = [
+  // USER
+  ['scan',     0, 100,  'manualInput', 'User สแกน\nbarcode + Enter'],
+
+  // DESKTOP APP
+  ['listener', 1, 100,  'process',     'GlobalBarcodeListener\nbuffer + VK decode\n→ barcode_ready', null, NODE_H_3],
+  ['mainwin',  1, 250,  'process',     'MainWindow\n_on_barcode_scanned\n→ spawn BarcodeWorker',     null, NODE_H_3],
+
+  // DESKTOP WORKERS
+  ['bcWorker', 2, 410,  'subprocess',  'BarcodeWorker (QThread)\nค้นหา picking + moves\n+ lot/exp', null, NODE_H_3],
+  ['bridge',   2, 570,  'subprocess',  'BarcodeBridgeWorker\nbroadcast(picking.origin)\nผ่าน WS :9999', null, NODE_H_3],
+
+  // EXTERNAL
+  ['odoo',     4, 410,  'cylinder',    'Odoo XML-RPC\nstock.picking\n(x_studio_tracking_no)', null, NODE_H_3],
+
+  // BROWSER spine (centered)
+  ['wsRecv',   3, 720,  'data',        'ws.onmessage\nรับ origin (raw string)',  null, NODE_H_2, BROWSER_MID],
+  ['handle',   3, 850,  'process',     'handleOrderInput(barcode)\nbusy lock check',     null, NODE_H_2, BROWSER_MID],
+  ['detect',   3, 980,  'decision',    'detectPlatform(text)\n──────────────\n/^\\d{18}$/ → tiktok\n/^[A-Z0-9]{6,25}$/i\n+ has letter → shopee\n/^S\\d{4,6}$/ → odoo\n/^\\d{16}$/ → lazada',
+                                       320, 160, BROWSER_MID],
+
+  // BROWSER 4-column row: match diamonds (per-platform)
+  ['matchTT',  3, 1230, 'decision',    'in TikTok\ntab now ?',  DEC_W_S, DEC_H_S, COL_TT_CX],
+  ['matchSH',  3, 1230, 'decision',    'in Shopee\ntab now ?',  DEC_W_S, DEC_H_S, COL_SH_CX],
+  ['matchOD',  3, 1230, 'decision',    'in Odoo\ntab now ?',    DEC_W_S, DEC_H_S, COL_OD_CX],
+  ['matchLZ',  3, 1230, 'decision',    'in Lazada\ntab now ?',  DEC_W_S, DEC_H_S, COL_LZ_CX],
+
+  // GM storage — narrow center cylinder (so YES channels can bypass on either side)
+  ['gmStore',  3, 1410, 'cylinder',    'GM_setValue(\'auto_print_job\')\n+ GM_addValueChangeListener\n(cross-tab via Tampermonkey storage)',
+                                       310, NODE_H_3, BROWSER_MID],
+
+  // 4 terminators
+  ['termTT',   3, 1570, 'terminator',  '▶ runTikTok()\nautomation\ntriggered', NODE_W_S, NODE_H_3, COL_TT_CX],
+  ['termSH',   3, 1570, 'terminator',  '▶ runShopee()\nautomation\ntriggered', NODE_W_S, NODE_H_3, COL_SH_CX],
+  ['termOD',   3, 1570, 'terminator',  '▶ runOdoo()\nautomation\ntriggered',   NODE_W_S, NODE_H_3, COL_OD_CX],
+  ['termLZ',   3, 1570, 'terminator',  '▶ runLazada()\nautomation\ntriggered', NODE_W_S, NODE_H_3, COL_LZ_CX],
+];
+
+const N = {};
+for (const def of nodeDefs) {
+  const [id, lane, y, type, label, wOverride, hOverride, cxOverride] = def;
+  let h;
+  if (type === 'decision') h = hOverride || DEC_H;
+  else if (hOverride) h = hOverride;
+  else { const lines = label.split('\n').length; h = lines >= 3 ? NODE_H_3 : NODE_H_2; }
+  const w = wOverride !== null && wOverride !== undefined
+    ? wOverride
+    : (type === 'decision' ? DEC_W : NODE_W);
+  const cx = cxOverride !== null && cxOverride !== undefined ? cxOverride : laneCenter(lane);
+  N[id] = { id, lane, y, type, label, w, h, cx, cy: y + h/2 };
+}
+
+// ===== SVG setup =====
+const svg = document.getElementById('chart');
+svg.setAttribute('viewBox', `0 0 ${TOTAL_W} ${TOTAL_H}`);
+svg.setAttribute('width', '100%');
+svg.style.maxWidth = TOTAL_W + 'px';
+
+const defs = el('defs', {}, svg);
+function defArrow(id, color) {
+  const m = el('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5,
+    markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, defs);
+  el('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: color }, m);
+}
+function defArrowBack(id, color) {
+  const m = el('marker', { id, viewBox: '0 0 10 10', refX: 1, refY: 5,
+    markerWidth: 7, markerHeight: 7, orient: 'auto' }, defs);
+  el('path', { d: 'M 10 0 L 0 5 L 10 10 z', fill: color }, m);
+}
+defArrow('arrow',     '#333');
+defArrow('arrowOk',   '#2E7D32');
+defArrowBack('arrowB','#333');
+
+// ===== Lanes =====
+const laneGroup = el('g', { id: 'lanes' }, svg);
+for (let i = 0; i < lanes.length; i++) {
+  const ln = lanes[i];
+  el('rect', { x: ln.x, y: 0, width: ln.w, height: TOTAL_H,
+               fill: ln.bg, stroke: '#d0d4da', 'stroke-width': 1 }, laneGroup);
+  el('rect', { x: ln.x, y: 0, width: ln.w, height: HEADER_H,
+               fill: ln.strip, stroke: 'none' }, laneGroup);
+  editText(laneGroup, ln.x, 0, ln.w, HEADER_H, 'lane:' + ln.id, ln.name,
+    { fontSize: 14, fontWeight: 700, color: 'white', letterSpacing: '1px' });
+}
+
+// ===== Sub-column dividers inside BROWSER lane =====
+const subGroup = el('g', { id: 'sub-columns' }, svg);
+for (let i = 1; i < 4; i++) {
+  const dx = BROWSER_LEFT + COL_W * i;
+  el('line', { x1: dx, y1: HEADER_H, x2: dx, y2: TOTAL_H,
+               stroke: '#d8c5da', 'stroke-width': 1, 'stroke-dasharray': '4 4' }, subGroup);
+}
+const subHeaderY = HEADER_H;
+const subHeaderH = 24;
+el('rect', { x: BROWSER_LEFT, y: subHeaderY, width: COL_W * 4, height: subHeaderH,
+             fill: '#F8BBD0', stroke: 'none' }, subGroup);
+editText(subGroup, BROWSER_LEFT,                   subHeaderY, COL_W, subHeaderH, 'subcol:tt', 'TikTok tab',  { fontSize: 11, fontWeight: 700, color: '#880E4F' });
+editText(subGroup, BROWSER_LEFT + COL_W,           subHeaderY, COL_W, subHeaderH, 'subcol:sh', 'Shopee tab',  { fontSize: 11, fontWeight: 700, color: '#880E4F' });
+editText(subGroup, BROWSER_LEFT + COL_W * 2,       subHeaderY, COL_W, subHeaderH, 'subcol:od', 'Odoo tab',    { fontSize: 11, fontWeight: 700, color: '#880E4F' });
+editText(subGroup, BROWSER_LEFT + COL_W * 3,       subHeaderY, COL_W, subHeaderH, 'subcol:lz', 'Lazada tab',  { fontSize: 11, fontWeight: 700, color: '#880E4F' });
+
+// ===== Shape drawing =====
+function drawShape(parent, node) {
+  const { type, cx, y, w, h, label } = node;
+  const x = cx - w/2;
+  let textFill = '#1a1a1a';
+
+  switch (type) {
+    case 'terminator':
+      el('rect', { x, y, width: w, height: h, rx: h/2, ry: h/2,
+        fill: '#2E7D32', stroke: '#1B5E20', 'stroke-width': 2 }, parent);
+      textFill = 'white';
+      break;
+    case 'process':
+      el('rect', { x, y, width: w, height: h,
+        fill: '#FFFFFF', stroke: '#333', 'stroke-width': 1.6 }, parent);
+      break;
+    case 'decision':
+      el('polygon', { points: `${cx},${y} ${x+w},${y+h/2} ${cx},${y+h} ${x},${y+h/2}`,
+        fill: '#FFF59D', stroke: '#F57F17', 'stroke-width': 1.8 }, parent);
+      break;
+    case 'data': {
+      const sl = 14;
+      el('polygon', { points: `${x+sl},${y} ${x+w},${y} ${x+w-sl},${y+h} ${x},${y+h}`,
+        fill: '#B3E5FC', stroke: '#0277BD', 'stroke-width': 1.6 }, parent);
+      break;
+    }
+    case 'manualInput':
+      el('polygon', { points: `${x},${y+12} ${x+w},${y} ${x+w},${y+h} ${x},${y+h}`,
+        fill: '#FFE082', stroke: '#FF8F00', 'stroke-width': 1.6 }, parent);
+      break;
+    case 'subprocess': {
+      const g = el('g', {}, parent);
+      el('rect', { x, y, width: w, height: h, fill: '#FFFFFF', stroke: '#333', 'stroke-width': 1.6 }, g);
+      el('line', { x1: x+9, y1: y, x2: x+9, y2: y+h, stroke: '#333', 'stroke-width': 1.6 }, g);
+      el('line', { x1: x+w-9, y1: y, x2: x+w-9, y2: y+h, stroke: '#333', 'stroke-width': 1.6 }, g);
+      break;
+    }
+    case 'cylinder': {
+      const g = el('g', {}, parent);
+      const ry = 8;
+      el('path', { d: `M ${x},${y+ry} L ${x},${y+h-ry} A ${w/2},${ry} 0 0 0 ${x+w},${y+h-ry} L ${x+w},${y+ry} Z`,
+        fill: '#A5D6A7', stroke: '#1B5E20', 'stroke-width': 1.6 }, g);
+      el('ellipse', { cx: x+w/2, cy: y+ry, rx: w/2, ry,
+        fill: '#A5D6A7', stroke: '#1B5E20', 'stroke-width': 1.6 }, g);
+      break;
+    }
+  }
+
+  if (node.id !== undefined) {
+    let fs = type === 'decision' ? 10.5 : 11.5;
+    if (node.id === 'detect') fs = 10;       // dense regex label
+    editText(parent, x, y, w, h, 'node:' + node.id, label,
+      { fontSize: fs, fontWeight: 600, color: textFill });
+  } else {
+    const lines = label.split('\n');
+    const lineH = 13;
+    const startY = y + h/2 - (lines.length - 1) * lineH / 2 + 4;
+    const text = el('text', { x: cx, y: startY, 'text-anchor': 'middle',
+      'font-size': type === 'decision' ? 11 : 11.5, 'font-weight': 600, fill: textFill }, parent);
+    lines.forEach((line, i) => {
+      const ts = el('tspan', { x: cx, dy: i === 0 ? 0 : lineH }, text);
+      ts.textContent = line;
+    });
+  }
+}
+
+// ===== Anchor / path helpers =====
+function anchor(id, side) {
+  const n = N[id];
+  switch (side) {
+    case 't': return { x: n.cx, y: n.y };
+    case 'b': return { x: n.cx, y: n.y + n.h };
+    case 'l': return { x: n.cx - n.w/2, y: n.y + n.h/2 };
+    case 'r': return { x: n.cx + n.w/2, y: n.y + n.h/2 };
+  }
+}
+
+function buildPath(points) {
+  let d = `M ${points[0][0]},${points[0][1]}`;
+  for (let i = 1; i < points.length; i++) d += ` L ${points[i][0]},${points[i][1]}`;
+  return d;
+}
+
+function autoPoints(a, b, fs, ts, via) {
+  const pts = [[a.x, a.y]];
+  if (via) {
+    for (const v of via) pts.push(v);
+  } else {
+    if (Math.abs(a.x - b.x) < 0.5 || Math.abs(a.y - b.y) < 0.5) {
+      // straight
+    } else if (fs === 'b' && ts === 't') {
+      const m = (a.y + b.y) / 2; pts.push([a.x, m], [b.x, m]);
+    } else if (fs === 't' && ts === 'b') {
+      const m = (a.y + b.y) / 2; pts.push([a.x, m], [b.x, m]);
+    } else if ((fs === 'r' && ts === 'l') || (fs === 'l' && ts === 'r')) {
+      const m = (a.x + b.x) / 2; pts.push([m, a.y], [m, b.y]);
+    } else if ((fs === 'b' && ts === 'l') || (fs === 'b' && ts === 'r')) {
+      pts.push([a.x, b.y]);
+    } else if ((fs === 't' && ts === 'l') || (fs === 't' && ts === 'r')) {
+      pts.push([a.x, b.y]);
+    } else if ((fs === 'r' && ts === 't') || (fs === 'l' && ts === 't')) {
+      pts.push([b.x, a.y]);
+    } else if ((fs === 'r' && ts === 'b') || (fs === 'l' && ts === 'b')) {
+      pts.push([b.x, a.y]);
+    }
+  }
+  pts.push([b.x, b.y]);
+  return pts;
+}
+
+function pickLabelPos(points, preferIdx) {
+  if (preferIdx !== undefined && points[preferIdx] && points[preferIdx+1]) {
+    const [x1, y1] = points[preferIdx];
+    const [x2, y2] = points[preferIdx+1];
+    return { x: (x1+x2)/2, y: (y1+y2)/2 };
+  }
+  let maxLen = 0, best = null;
+  for (let i = 0; i < points.length - 1; i++) {
+    const [x1, y1] = points[i], [x2, y2] = points[i+1];
+    const len = Math.hypot(x2-x1, y2-y1);
+    if (len > maxLen) { maxLen = len; best = { x: (x1+x2)/2, y: (y1+y2)/2 }; }
+  }
+  return best;
+}
+
+// ===== Edges =====
+// Staggered fan-out from detect (4 different horizontal-corner y values to avoid label collision)
+const detectBy = N.detect.y + N.detect.h;        // 1140
+const fanY_TT = detectBy + 18;                   // 1158
+const fanY_SH = detectBy + 42;                   // 1182
+const fanY_OD = detectBy + 42;
+const fanY_LZ = detectBy + 18;
+// (TT/LZ share outer y, SH/OD share inner y — labels still distinct by x)
+
+const matchBy = N.matchTT.y + N.matchTT.h;       // 1320
+const gmTop   = N.gmStore.y;                     // 1410
+const gmBy    = N.gmStore.y + N.gmStore.h;       // 1492
+const termTop = N.termTT.y;                      // 1570
+
+// GM entry/exit x positions (4 columns spread inside the cylinder)
+const gmEntryTT = N.gmStore.cx - N.gmStore.w/2 + 50;     // ~1095
+const gmEntrySH = N.gmStore.cx - N.gmStore.w/2 + 120;    // ~1165
+const gmEntryOD = N.gmStore.cx - N.gmStore.w/2 + 190;    // ~1235
+const gmEntryLZ = N.gmStore.cx - N.gmStore.w/2 + 260;    // ~1305
+
+const edges = [
+  // USER → APP
+  { from: 'scan',     fs: 'r', to: 'listener', ts: 'l', label: 'HID keystroke' },
+  { from: 'listener', fs: 'b', to: 'mainwin',  ts: 't', label: 'barcode_ready\nsignal' },
+
+  // APP → WORKERS
+  { from: 'mainwin',  fs: 'r', to: 'bcWorker', ts: 'l', label: 'spawn QThread' },
+
+  // WORKERS ↔ EXTERNAL (bidirectional)
+  { from: 'bcWorker', fs: 'r', to: 'odoo', ts: 'l',
+    label: 'search_read\n→ picking.origin', style: 'bi' },
+
+  // WORKERS internal
+  { from: 'bcWorker', fs: 'b', to: 'bridge', ts: 't', label: 'origin_ready\nsignal' },
+
+  // WORKERS → BROWSER (fire-and-forget WS broadcast, via outside-lane channel)
+  { from: 'bridge', fs: 'r', to: 'wsRecv', ts: 'l',
+    label: 'ws://localhost:9999\nbroadcast text frame', style: 'ok',
+    via: [
+      [laneRight(2) + 30, N.bridge.cy],
+      [laneRight(2) + 30, N.wsRecv.cy],
+    ]
+  },
+
+  // BROWSER spine (centered)
+  { from: 'wsRecv', fs: 'b', to: 'handle', ts: 't' },
+  { from: 'handle', fs: 'b', to: 'detect', ts: 't' },
+
+  // detectPlatform fan-out to 4 columns — staggered Y to keep labels readable
+  { from: 'detect', fs: 'b', to: 'matchTT', ts: 't', label: 'tiktok',
+    via: [[N.detect.cx, fanY_TT], [COL_TT_CX, fanY_TT]] },
+  { from: 'detect', fs: 'b', to: 'matchSH', ts: 't', label: 'shopee',
+    via: [[N.detect.cx, fanY_SH], [COL_SH_CX, fanY_SH]] },
+  { from: 'detect', fs: 'b', to: 'matchOD', ts: 't', label: 'odoo',
+    via: [[N.detect.cx, fanY_OD], [COL_OD_CX, fanY_OD]] },
+  { from: 'detect', fs: 'b', to: 'matchLZ', ts: 't', label: 'lazada',
+    via: [[N.detect.cx, fanY_LZ], [COL_LZ_CX, fanY_LZ]] },
+
+  // YES → terminator (route via dedicated channels that bypass GM storage)
+  { from: 'matchTT', fs: 'l', to: 'termTT', ts: 'l', label: 'YES',
+    via: [[Y_CH_TT, N.matchTT.cy], [Y_CH_TT, N.termTT.cy]] },
+  { from: 'matchSH', fs: 'l', to: 'termSH', ts: 'l', label: 'YES',
+    via: [[Y_CH_SH, N.matchSH.cy], [Y_CH_SH, N.termSH.cy]] },
+  { from: 'matchOD', fs: 'r', to: 'termOD', ts: 'r', label: 'YES',
+    via: [[Y_CH_OD, N.matchOD.cy], [Y_CH_OD, N.termOD.cy]] },
+  { from: 'matchLZ', fs: 'r', to: 'termLZ', ts: 'r', label: 'YES',
+    via: [[Y_CH_LZ, N.matchLZ.cy], [Y_CH_LZ, N.termLZ.cy]] },
+
+  // NO → GM storage (diagonal fan-in, green for cross-tab)
+  { from: 'matchTT', fs: 'b', to: 'gmStore', ts: 't', style: 'ok', label: 'NO',
+    via: [[COL_TT_CX, matchBy + 30], [gmEntryTT, gmTop - 10]] },
+  { from: 'matchSH', fs: 'b', to: 'gmStore', ts: 't', style: 'ok', label: 'NO',
+    via: [[COL_SH_CX, matchBy + 30], [gmEntrySH, gmTop - 10]] },
+  { from: 'matchOD', fs: 'b', to: 'gmStore', ts: 't', style: 'ok', label: 'NO',
+    via: [[COL_OD_CX, matchBy + 30], [gmEntryOD, gmTop - 10]] },
+  { from: 'matchLZ', fs: 'b', to: 'gmStore', ts: 't', style: 'ok', label: 'NO',
+    via: [[COL_LZ_CX, matchBy + 30], [gmEntryLZ, gmTop - 10]] },
+
+  // GM storage → terminators (diagonal fan-out, green)
+  { from: 'gmStore', fs: 'b', to: 'termTT', ts: 't', style: 'ok', label: 'listener\nin TT tab',
+    via: [[gmEntryTT, gmBy + 10], [COL_TT_CX, termTop - 24]] },
+  { from: 'gmStore', fs: 'b', to: 'termSH', ts: 't', style: 'ok', label: 'listener\nin SH tab',
+    via: [[gmEntrySH, gmBy + 10], [COL_SH_CX, termTop - 24]] },
+  { from: 'gmStore', fs: 'b', to: 'termOD', ts: 't', style: 'ok', label: 'listener\nin OD tab',
+    via: [[gmEntryOD, gmBy + 10], [COL_OD_CX, termTop - 24]] },
+  { from: 'gmStore', fs: 'b', to: 'termLZ', ts: 't', style: 'ok', label: 'listener\nin LZ tab',
+    via: [[gmEntryLZ, gmBy + 10], [COL_LZ_CX, termTop - 24]] },
+];
+
+// ===== Render edges =====
+const edgeLayer = el('g', { id: 'edges' }, svg);
+const edgeLabelLayer = el('g', { id: 'edge-labels' }, svg);
+
+for (const e of edges) {
+  const a = anchor(e.from, e.fs);
+  const b = anchor(e.to, e.ts);
+  const points = autoPoints(a, b, e.fs, e.ts, e.via);
+  const d = buildPath(points);
+
+  let stroke = '#333', dash = 'none';
+  const attrs = {
+    d, fill: 'none', 'stroke-width': 1.7,
+    'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+    'marker-end': 'url(#arrow)'
+  };
+  if (e.style === 'ok') {
+    stroke = '#2E7D32';
+    attrs['marker-end'] = 'url(#arrowOk)';
+  } else if (e.style === 'bi') {
+    attrs['marker-start'] = 'url(#arrowB)';
+  }
+  attrs.stroke = stroke;
+  attrs['stroke-dasharray'] = dash;
+  el('path', attrs, edgeLayer);
+
+  if (e.label) {
+    const pos = pickLabelPos(points, e.labelSegIdx);
+    if (!pos) continue;
+    const lx = pos.x, ly = pos.y;
+    const edgeId = 'edge:' + e.from + '>' + e.to;
+    const actual = loadEdit(edgeId, e.label);
+    const lines = actual.split('\n');
+    const lh = 13;
+    const maxLen = Math.max(...lines.map(l => l.length));
+    const bw = Math.max(36, maxLen * 6.4 + 12);
+    const bh = lines.length * lh + 6;
+    el('rect', {
+      x: lx - bw/2, y: ly - bh/2, width: bw, height: bh,
+      fill: '#fff', stroke: stroke, 'stroke-width': 0.8,
+      opacity: 0.95, rx: 4
+    }, edgeLabelLayer);
+    editText(edgeLabelLayer, lx - bw/2, ly - bh/2, bw, bh, edgeId, e.label,
+      { fontSize: 10.5, fontWeight: 600, color: stroke });
+  }
+}
+
+// ===== Render nodes =====
+const nodeLayer = el('g', { id: 'nodes' }, svg);
+for (const id in N) drawShape(nodeLayer, N[id]);
+
+// ===== Legend =====
+const legendItems = [
+  { type: 'terminator',   title: 'Terminator',         desc: 'จุดเริ่ม / จบ flow' },
+  { type: 'process',      title: 'Process',            desc: 'ขั้นตอนทำงานปกติ' },
+  { type: 'decision',     title: 'Decision',           desc: 'จุดตัดสินใจ (YES/NO หรือ multi-way)' },
+  { type: 'data',         title: 'Data / I-O',         desc: 'รับ/ส่งข้อมูล (WS message)' },
+  { type: 'manualInput',  title: 'Manual Input',       desc: 'user ป้อนข้อมูลเอง (scan)' },
+  { type: 'subprocess',   title: 'Predefined Process', desc: 'subroutine / worker thread' },
+  { type: 'cylinder',     title: 'Storage / DB',       desc: 'Odoo / GM shared storage' },
+];
+const legend = document.getElementById('legend');
+for (const li of legendItems) {
+  const wrap = document.createElement('div');
+  wrap.className = 'legend-item';
+  const svgL = document.createElementNS(SVG_NS, 'svg');
+  svgL.setAttribute('viewBox', '0 0 70 40');
+  const fakeNode = { type: li.type, cx: 35, y: 6, w: 50, h: 28, label: '' };
+  if (li.type === 'decision') { fakeNode.w = 50; fakeNode.h = 32; fakeNode.y = 4; }
+  drawShape(svgL, fakeNode);
+  wrap.appendChild(svgL);
+  const txt = document.createElement('div');
+  txt.innerHTML = `<strong>${li.title}</strong><br><span>${li.desc}</span>`;
+  wrap.appendChild(txt);
+  legend.appendChild(wrap);
+}
+
+updateBadge();
+</script>
+</body>
+</html>

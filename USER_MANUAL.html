@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>คู่มือการใช้งานระบบตรวจนับและพิมพ์ใบปะหน้า</title>
+<style>
+  @page { size: A4; margin: 16mm 16mm 17mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: #172033; background: #fff; font-family: "Leelawadee UI", Tahoma, sans-serif; font-size: 14pt; line-height: 1.55; }
+  h1, h2, h3 { color: #123a63; page-break-after: avoid; }
+  h1 { font-size: 27pt; line-height: 1.2; margin: 0 0 14px; }
+  h2 { font-size: 21pt; margin: 0 0 14px; padding-bottom: 7px; border-bottom: 2px solid #1d5f9f; }
+  h3 { font-size: 16pt; margin: 22px 0 8px; }
+  p { margin: 7px 0 12px; }
+  ul, ol { margin: 7px 0 14px 26px; padding: 0; }
+  li { margin: 7px 0; }
+  strong { color: #111827; }
+  code { font-family: Consolas, monospace; font-size: 11.5pt; background: #edf2f7; padding: 1px 5px; border-radius: 3px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; page-break-inside: avoid; }
+  th { background: #123a63; color: #fff; text-align: left; padding: 9px; font-weight: 700; }
+  td { border: 1px solid #b9c4d0; padding: 9px; vertical-align: top; }
+  tr:nth-child(even) td { background: #f5f8fb; }
+  .page { page-break-before: always; }
+  .keep { page-break-inside: avoid; }
+  .cover { min-height: 250mm; display: flex; flex-direction: column; justify-content: center; border-top: 16px solid #123a63; border-bottom: 7px solid #f4b400; padding: 22mm 10mm; }
+  .cover .kicker { color: #1d5f9f; font-size: 16pt; font-weight: 700; margin-bottom: 15px; }
+  .cover .subtitle { font-size: 17pt; color: #46566a; max-width: 145mm; }
+  .cover .audience { margin-top: 30px; padding: 13px 16px; background: #e8f1fb; border: 2px solid #1d5f9f; font-weight: 700; width: fit-content; }
+  .flow { width: 100%; margin: 18px 0; border-spacing: 0; border-collapse: separate; }
+  .flow td { width: 20%; text-align: center; background: #e8f1fb; border: 2px solid #1d5f9f; font-weight: 700; padding: 12px 6px; }
+  .flow .arrow { width: 4%; border: 0; background: #fff; color: #1d5f9f; font-size: 22pt; padding: 2px; }
+  .callout { margin: 13px 0 17px; padding: 12px 15px; border: 2px solid; page-break-inside: avoid; }
+  .callout strong:first-child { display: block; font-size: 15pt; margin-bottom: 3px; }
+  .note { background: #e8f1fb; border-color: #1d5f9f; }
+  .warn { background: #fff4d6; border-color: #b56a00; }
+  .danger { background: #fdeaea; border-color: #b42318; }
+  .success { background: #e8f6ed; border-color: #237a3b; }
+  .checklist { list-style: none; margin-left: 0; }
+  .checklist li { padding: 9px 10px 9px 40px; border-bottom: 1px solid #c9d2dc; position: relative; }
+  .checklist li:before { content: "□"; position: absolute; left: 8px; top: 4px; font-size: 23pt; color: #123a63; }
+  .step { display: table; width: 100%; margin: 11px 0; page-break-inside: avoid; }
+  .step-no { display: table-cell; width: 45px; height: 45px; background: #123a63; color: white; text-align: center; vertical-align: middle; font-size: 18pt; font-weight: 700; }
+  .step-body { display: table-cell; padding: 4px 0 4px 14px; vertical-align: middle; }
+  .step-body strong { display: block; color: #123a63; font-size: 15pt; }
+  .status { font-weight: 700; white-space: nowrap; }
+  .green { color: #176b32; }
+  .orange { color: #9a5200; }
+  .red { color: #a61b15; }
+  .screen { border: 2px solid #8493a5; background: #f3f6f9; padding: 12px; margin: 14px 0 18px; page-break-inside: avoid; }
+  .screen-title { background: #123a63; color: #fff; margin: -12px -12px 12px; padding: 7px 11px; font-size: 12pt; }
+  .screen-row { display: table; width: 100%; border-spacing: 8px; }
+  .screen-cell { display: table-cell; border: 1px solid #b5c0cb; background: #fff; padding: 12px; vertical-align: middle; text-align: center; }
+  .screen-caption { font-size: 11.5pt; color: #526174; margin-top: 8px; }
+  .small { font-size: 11.5pt; color: #526174; }
+  .toc td { border: 0; border-bottom: 1px dotted #9aa7b5; padding: 6px 2px; background: #fff !important; }
+  .footer-note { margin-top: 22px; font-size: 11pt; color: #526174; }
+  .editor-note { margin: 16px 0 20px; padding: 14px 16px; background: #eef5fc; border: 2px solid #1d5f9f; page-break-inside: avoid; }
+  .editor-note strong { display: block; color: #123a63; font-size: 15pt; margin-bottom: 4px; }
+  .figure-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 14px 0 20px; }
+  .figure-slot { position: relative; display: flex; flex-direction: column; justify-content: center; min-height: 210px; padding: 24px 18px 18px; border: 3px dashed #6f8194; background: #f7f9fb; text-align: center; page-break-inside: avoid; overflow: hidden; }
+  .figure-slot.wide { min-height: 280px; margin: 14px 0 20px; }
+  .figure-slot.tall { min-height: 300px; }
+  .figure-slot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #fff; }
+  .figure-number { position: absolute; top: 10px; left: 10px; width: 34px; height: 34px; border-radius: 50%; background: #123a63; color: #fff; font-size: 13pt; font-weight: 700; line-height: 34px; }
+  .figure-title { color: #123a63; font-size: 15pt; font-weight: 700; margin: 10px 0 5px; }
+  .figure-file { display: inline-block; align-self: center; margin: 4px 0 8px; padding: 2px 7px; border-radius: 3px; background: #e4eaf0; color: #39485a; font: 10.5pt Consolas, monospace; }
+  .figure-spec { color: #46566a; font-size: 11.5pt; line-height: 1.45; }
+  .figure-privacy { margin-top: 8px; color: #a61b15; font-size: 10.5pt; font-weight: 700; }
+  .figure-caption { margin: -10px 0 18px; color: #526174; font-size: 11pt; text-align: center; }
+  @media (max-width: 760px) { .figure-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="kicker">สำหรับพนักงาน Packing</div>
+  <h1>คู่มือการใช้งานระบบ<br>AI ตรวจนับซองและพิมพ์ใบปะหน้าอัตโนมัติ</h1>
+  <p class="subtitle">ครอบคลุมการเปิดระบบ การสแกนใบ Pack การวางซองให้ AI ตรวจนับ การพิมพ์ใบปะหน้า และการแก้ปัญหาเบื้องต้น</p>
+  <div class="audience">อ่าน Checklist ก่อนเริ่มงานทุกครั้ง</div>
+</section>
+
+<section class="page">
+  <h2>สารบัญ</h2>
+  <div class="editor-note">
+    <strong>คำแนะนำสำหรับผู้จัดทำเอกสาร</strong>
+    ช่องเส้นประคือพื้นที่สำหรับใส่ภาพจริง ให้เก็บไฟล์ไว้ในโฟลเดอร์ <code>images/</code> ตามชื่อที่ระบุ แล้วแทนข้อความภายในช่องด้วย <code>&lt;img src="images/ชื่อไฟล์.png" alt="คำอธิบายภาพ"&gt;</code> ก่อนเผยแพร่ต้องปิดบังชื่อลูกค้า ที่อยู่ เบอร์โทร และเลข Order จริง
+  </div>
+  <table class="toc">
+    <tr><td>1. ระบบนี้ทำอะไร</td><td>ภาพรวม</td></tr>
+    <tr><td>2. Checklist ก่อนเริ่มงาน</td><td>ตรวจเครื่องและระบบ</td></tr>
+    <tr><td>3. ขั้นตอนทำงานปกติ</td><td>สแกน นับ และพิมพ์</td></tr>
+    <tr><td>4. วิธีวางซองที่ถูกต้อง</td><td>ลดการนับผิด</td></tr>
+    <tr><td>5. การอ่านผลตรวจนับ</td><td>ครบ ขาด เกิน และสินค้าผิด</td></tr>
+    <tr><td>6. การพิมพ์ใบปะหน้า</td><td>Shopee, TikTok, Odoo และ Lazada</td></tr>
+    <tr><td>7. ข้อห้ามและข้อควรระวัง</td><td>สิ่งที่พนักงานห้ามทำ</td></tr>
+    <tr><td>8. แก้ปัญหาเบื้องต้น</td><td>Bridge, Script, AI, Odoo และ Printer</td></tr>
+  </table>
+
+  <h2 style="margin-top:30px">1. ระบบนี้ทำอะไร</h2>
+  <p>ระบบประกอบด้วยโปรแกรมตรวจนับซองบนเครื่อง Windows และระบบพิมพ์ใบปะหน้าบน Browser เมื่อพนักงานสแกน Barcode ระบบจะค้นหาใบงานใน Odoo เปิดหน้าต่างกล้อง และส่งเลข Order ไปยังเว็บช่องทางที่เกี่ยวข้อง</p>
+
+  <table class="flow" aria-label="ลำดับการทำงาน">
+    <tr>
+      <td>สแกน Barcode</td><td class="arrow">&gt;</td>
+      <td>ค้นหา Odoo</td><td class="arrow">&gt;</td>
+      <td>AI ตรวจนับ</td><td class="arrow">&gt;</td>
+      <td>พิมพ์ใบปะหน้า</td>
+    </tr>
+  </table>
+
+  <!-- IMAGE 01: ภาพรวมโต๊ะทำงานและอุปกรณ์ -->
+  <div class="figure-slot wide">
+    <div class="figure-number">01</div>
+    <div class="figure-title">ภาพรวมจุดทำงานทั้งหมด</div>
+    <div class="figure-file">images/01-workstation-overview.jpg</div>
+    <div class="figure-spec">ถ่ายให้เห็นจอคอมพิวเตอร์ กล้อง พื้นที่วางซอง Scanner และ Printer ในภาพเดียว พร้อมลูกศรระบุชื่ออุปกรณ์แต่ละชิ้น</div>
+    <div class="figure-privacy">ห้ามให้ข้อมูลลูกค้าหรือฉลากจริงอ่านได้</div>
+  </div>
+
+  <div class="callout warn">
+    <strong>ข้อความสำคัญ</strong>
+    ใบปะหน้าอาจเริ่มพิมพ์ทันทีเมื่อระบบค้นหา Order เจอ การที่ใบปะหน้าออกแล้วไม่ได้หมายความว่า AI ตรวจนับผ่าน ต้องดูผลบนหน้าต่างตรวจนับทุกครั้ง
+  </div>
+</section>
+
+<section class="page">
+  <h2>2. Checklist ก่อนเริ่มงาน</h2>
+  <p>ตรวจตามรายการนี้ก่อนเริ่มกะ ห้ามข้ามรายการที่ยังไม่พร้อม</p>
+
+  <h3>โปรแกรมและ Browser</h3>
+  <ul class="checklist">
+    <li>เปิดโปรแกรมด้วย <code>launcher.exe</code> เท่านั้น</li>
+    <li>รอจนโปรแกรมตรวจนับเปิดและแสดงว่ากล้องพร้อม</li>
+    <li>เปิด Google Chrome หรือ Browser ที่ติดตั้ง Tampermonkey</li>
+    <li>เปิดและ Login ครบ 4 แท็บ: Shopee, TikTok, Odoo และ Lazada</li>
+    <li>แท็บ Odoo ต้องอยู่ที่หน้า Sales</li>
+    <li>ตรวจว่า Tampermonkey และสคริปต์ Auto Print เป็น Enabled</li>
+    <li>Refresh แต่ละแท็บ และรอข้อความ <code>Scanner bridge connected</code></li>
+  </ul>
+
+  <div class="figure-grid">
+    <!-- IMAGE 02: Launcher และ Desktop app พร้อมใช้งาน -->
+    <div class="figure-slot">
+      <div class="figure-number">02</div>
+      <div class="figure-title">Launcher และโปรแกรมพร้อมใช้งาน</div>
+      <div class="figure-file">images/02-launcher-app-ready.png</div>
+      <div class="figure-spec">จับหน้าจอหลังเปิด <code>launcher.exe</code> จนเห็นข้อความว่ากล้องพร้อมและรอสแกน Barcode</div>
+    </div>
+    <!-- IMAGE 03: Browser tabs, Tampermonkey และ bridge -->
+    <div class="figure-slot">
+      <div class="figure-number">03</div>
+      <div class="figure-title">Browser และ Scanner Bridge</div>
+      <div class="figure-file">images/03-browser-tabs-bridge.png</div>
+      <div class="figure-spec">ให้เห็นแท็บ Shopee, TikTok, Odoo Sales และ Lazada พร้อม Tampermonkey Enabled และข้อความ <code>Scanner bridge connected</code></div>
+      <div class="figure-privacy">ปิดบังชื่อบัญชีและข้อมูล Order</div>
+    </div>
+  </div>
+
+  <h3>กล้องและพื้นที่ตรวจนับ</h3>
+  <ul class="checklist">
+    <li>เลนส์กล้องสะอาด ไม่มีฝุ่น คราบ หรือสิ่งปิดบัง</li>
+    <li>กล้องยึดแน่นและอยู่ในตำแหน่งเดิม</li>
+    <li>ภาพชัด ไม่ค้าง ไม่มืด และไม่มีแสงสะท้อนแรง</li>
+    <li>พื้นที่ภายในกรอบตรวจนับว่าง ไม่มีซองหรือวัสดุจาก Order ก่อนหน้า</li>
+  </ul>
+
+  <!-- IMAGE 04: กล้องและพื้นที่ตรวจนับก่อนเริ่มงาน -->
+  <div class="figure-slot wide">
+    <div class="figure-number">04</div>
+    <div class="figure-title">กล้องและพื้นที่ตรวจนับที่พร้อมใช้งาน</div>
+    <div class="figure-file">images/04-camera-counting-area.jpg</div>
+    <div class="figure-spec">ถ่ายจากมุมที่เห็นตำแหน่งกล้อง กรอบตรวจนับที่ว่าง แสงบนโต๊ะ และตัวอย่างภาพจากกล้องที่ชัดเจน</div>
+  </div>
+
+  <h3>เครื่องพิมพ์</h3>
+  <ul class="checklist">
+    <li>Printer เปิดอยู่ เชื่อมต่อกับเครื่อง และไม่มีไฟแจ้งเตือน</li>
+    <li>มีกระดาษฉลากเพียงพอ ฝาปิดสนิท และไม่มีฉลากติดค้าง</li>
+    <li>เครื่องถูกตั้งค่า Silent Print พร้อมใช้งาน</li>
+  </ul>
+
+  <!-- IMAGE 05: Printer พร้อมใช้งาน -->
+  <div class="figure-slot wide">
+    <div class="figure-number">05</div>
+    <div class="figure-title">Printer และกระดาษฉลากพร้อมใช้งาน</div>
+    <div class="figure-file">images/05-printer-ready.jpg</div>
+    <div class="figure-spec">ถ่ายให้เห็นไฟสถานะปกติ ม้วนฉลาก ฝาปิด และทางออกของฉลาก ใช้ลูกศรชี้จุดตรวจทั้ง 4 จุด</div>
+  </div>
+
+  <div class="callout warn">
+    <strong>ระหว่าง Launcher อัปเดต</strong>
+    ห้ามปิดโปรแกรมหรือปิดเครื่อง หากไม่มีความคืบหน้าเกิน 10 นาที ให้แจ้ง Copter ห้ามลบหรือย้ายไฟล์ในโฟลเดอร์โปรแกรมเอง
+  </div>
+</section>
+
+<section class="page">
+  <h2>3. ขั้นตอนทำงานปกติ</h2>
+
+  <div class="step"><div class="step-no">1</div><div class="step-body"><strong>ตรวจว่าเครื่องพร้อม</strong>ทำ Checklist ก่อนเริ่มงานให้ครบ โดยเฉพาะกล้อง, Odoo, Tampermonkey, Bridge และ Printer</div></div>
+  <div class="step"><div class="step-no">2</div><div class="step-body"><strong>สแกน Barcode บนใบ Pack</strong>ยิง Scanner หนึ่งครั้งและรอ ห้ามสแกนรัวหรือยิงเลขเดิมซ้ำขณะที่ระบบกำลังทำงาน</div></div>
+  <div class="step"><div class="step-no">3</div><div class="step-body"><strong>รอระบบค้นหา Order</strong>โปรแกรมจะค้นหาใบงานใน Odoo และเปิดหน้าต่างกล้อง ระบบ Browser จะเริ่มค้นหาใบปะหน้าตามช่องทางของ Order</div></div>
+  <div class="step"><div class="step-no">4</div><div class="step-body"><strong>วางซองในพื้นที่ตรวจนับ</strong>วางทุกซองให้เห็นเต็มใบ ไม่ซ้อน ไม่พับ และอยู่ภายในกรอบทั้งหมด</div></div>
+  <div class="step"><div class="step-no">5</div><div class="step-body"><strong>เอามือออกและรอผล</strong>ห้ามจับหรือขยับซองขณะที่ตัวเลขกำลังเปลี่ยน รอจนระบบแสดงผลชัดเจน</div></div>
+  <div class="step"><div class="step-no">6</div><div class="step-body"><strong>ตรวจสถานะ</strong>ดำเนินการต่อเมื่อหน้าจอแสดง <span class="status green">ครบแล้ว</span> และมีเสียงถูกต้อง</div></div>
+  <div class="step"><div class="step-no">7</div><div class="step-body"><strong>รับใบปะหน้าและแพ็กสินค้า</strong>ใบปะหน้าจะออกจาก Printer อัตโนมัติ เก็บฉลากของ Order ปัจจุบันและดำเนินการแพ็ก</div></div>
+
+  <div class="figure-grid">
+    <!-- IMAGE 06: หน้ารอสแกน -->
+    <div class="figure-slot">
+      <div class="figure-number">06</div>
+      <div class="figure-title">หน้ารอสแกน Barcode</div>
+      <div class="figure-file">images/06-waiting-for-barcode.png</div>
+      <div class="figure-spec">จับเฉพาะหน้าต่าง Desktop app ตอนกล้องพร้อมและยังไม่มี Order</div>
+    </div>
+    <!-- IMAGE 07: กำลังค้นหา Odoo -->
+    <div class="figure-slot">
+      <div class="figure-number">07</div>
+      <div class="figure-title">สถานะกำลังค้นหา Order</div>
+      <div class="figure-file">images/07-searching-order.png</div>
+      <div class="figure-spec">ให้เห็นข้อความกำลังค้นหา Barcode หลังสแกนหนึ่งครั้ง</div>
+      <div class="figure-privacy">ปิดบังเลข Barcode จริง</div>
+    </div>
+    <!-- IMAGE 08: หน้าต่างตรวจนับ -->
+    <div class="figure-slot">
+      <div class="figure-number">08</div>
+      <div class="figure-title">หน้าต่าง AI ตรวจนับซอง</div>
+      <div class="figure-file">images/08-counting-window.png</div>
+      <div class="figure-spec">ให้เห็นภาพกล้อง กรอบตรวจนับ ชื่อสินค้า Lot/EXP จำนวนที่ต้องการ และจำนวนที่ AI ตรวจพบ</div>
+      <div class="figure-privacy">ใช้ Order ทดสอบและปิดบังข้อมูลที่ระบุตัวลูกค้า</div>
+    </div>
+    <!-- IMAGE 09: ผลครบแล้ว -->
+    <div class="figure-slot">
+      <div class="figure-number">09</div>
+      <div class="figure-title">ผลตรวจนับครบแล้ว</div>
+      <div class="figure-file">images/09-count-complete.png</div>
+      <div class="figure-spec">จับช่วงที่จำนวนตรงและหน้าจอแสดง “ครบแล้ว” ก่อนหน้าต่างปิดอัตโนมัติ</div>
+    </div>
+  </div>
+</section>
+
+<section class="page">
+  <h2>4. วิธีวางซองที่ถูกต้อง</h2>
+
+  <table>
+    <tr><th>ต้องทำ</th><th>ห้ามทำ</th></tr>
+    <tr><td>วางซองให้เห็นเต็มใบทุกชิ้น</td><td>วางซองซ้อนหรือบังกัน</td></tr>
+    <tr><td>กระจายซองให้มีช่องว่างระหว่างชิ้น</td><td>กองซองรวมกันเป็นชั้น</td></tr>
+    <tr><td>ให้ซองทุกชิ้นอยู่ในกรอบตรวจนับ</td><td>ปล่อยส่วนใดส่วนหนึ่งของซองออกนอกกรอบ</td></tr>
+    <tr><td>คลี่ซองที่พับหรือยับให้เห็นรูปทรง</td><td>ปล่อยซองพับ ม้วน หรือกลับด้านจนระบุสินค้าไม่ได้</td></tr>
+    <tr><td>เอามือ อุปกรณ์ และใบ Pack ออกจากกรอบ</td><td>ใช้มือจับซองค้างไว้ระหว่างตรวจ</td></tr>
+    <tr><td>รอให้ภาพและจำนวนหยุดเปลี่ยน</td><td>รีบหยิบซองออกก่อนระบบแสดงผล</td></tr>
+  </table>
+
+  <div class="figure-grid">
+    <!-- IMAGE 10: การวางซองถูกต้อง -->
+    <div class="figure-slot tall" style="border-color:#237a3b; background:#eef8f1">
+      <div class="figure-number">10</div>
+      <div class="figure-title green">ตัวอย่างวางซองถูกต้อง</div>
+      <div class="figure-file">images/10-sachets-correct.jpg</div>
+      <div class="figure-spec">ถ่ายจากกล้องจริง ให้เห็นซองเต็มใบทุกชิ้น ไม่ซ้อน มีช่องว่าง และอยู่ในกรอบทั้งหมด</div>
+    </div>
+    <!-- IMAGE 11: การวางซองไม่ถูกต้อง -->
+    <div class="figure-slot tall" style="border-color:#b42318; background:#fff1f1">
+      <div class="figure-number">11</div>
+      <div class="figure-title red">ตัวอย่างวางซองไม่ถูกต้อง</div>
+      <div class="figure-file">images/11-sachets-incorrect.jpg</div>
+      <div class="figure-spec">จัดตัวอย่างให้เห็นข้อผิดพลาดชัดเจน เช่น ซ้อน พับ บัง ออกนอกกรอบ หรือมีมืออยู่ในภาพ แล้วใส่ลูกศรสีแดงกำกับ</div>
+    </div>
+  </div>
+
+  <div class="callout danger">
+    <strong>ห้ามปรับ Settings เอง</strong>
+    ค่า Crop และ Confidence มีผลต่อทุก Order ของเครื่อง หากกรอบไม่ตรงหรือ AI ตรวจจับผิดปกติ ให้แจ้ง Copter เท่านั้น
+  </div>
+</section>
+
+<section class="page">
+  <h2>5. การอ่านผลตรวจนับ</h2>
+
+  <table>
+    <tr><th>สถานะบนหน้าจอ</th><th>ความหมาย</th><th>สิ่งที่ต้องทำ</th></tr>
+    <tr><td><span class="status green">ครบแล้ว</span></td><td>ชนิดและจำนวนสินค้าตรงกับ Order</td><td>รอหน้าต่างปิด รับใบปะหน้า และแพ็กต่อ</td></tr>
+    <tr><td><span class="status orange">ขาด</span></td><td>AI เห็นสินค้าน้อยกว่าจำนวนใน Order</td><td>กดปิด แจ้ง Copter นับมือเทียบใบ Pack แล้วแพ็กต่อ</td></tr>
+    <tr><td><span class="status red">เกิน</span></td><td>AI เห็นสินค้ามากกว่าจำนวนใน Order</td><td>กดปิด แจ้ง Copter นับมือเทียบใบ Pack แล้วแพ็กต่อ</td></tr>
+    <tr><td><span class="status red">พบสินค้าที่ไม่ใช่ใน Order</span></td><td>AI ตรวจพบสินค้าคนละชนิดกับ Order</td><td>กดปิด แจ้ง Copter ตรวจชนิดสินค้ากับใบ Pack แล้วแพ็กต่อ</td></tr>
+  </table>
+
+  <div class="figure-grid">
+    <!-- IMAGE 12: สถานะครบ -->
+    <div class="figure-slot">
+      <div class="figure-number">12</div>
+      <div class="figure-title green">สถานะ “ครบแล้ว”</div>
+      <div class="figure-file">images/12-status-complete.png</div>
+      <div class="figure-spec">Crop เฉพาะส่วนสถานะและจำนวนที่ตรงกัน ให้ข้อความอ่านได้ชัด</div>
+    </div>
+    <!-- IMAGE 13: สถานะขาด -->
+    <div class="figure-slot">
+      <div class="figure-number">13</div>
+      <div class="figure-title orange">สถานะ “ขาด”</div>
+      <div class="figure-file">images/13-status-under.png</div>
+      <div class="figure-spec">ให้เห็นจำนวนที่ต้องการ จำนวนที่ตรวจพบ และตัวเลขที่ขาด</div>
+    </div>
+    <!-- IMAGE 14: สถานะเกิน -->
+    <div class="figure-slot">
+      <div class="figure-number">14</div>
+      <div class="figure-title red">สถานะ “เกิน”</div>
+      <div class="figure-file">images/14-status-over.png</div>
+      <div class="figure-spec">ให้เห็นจำนวนที่ต้องการ จำนวนที่ตรวจพบ และตัวเลขที่เกิน</div>
+    </div>
+    <!-- IMAGE 15: สินค้าผิด Order -->
+    <div class="figure-slot">
+      <div class="figure-number">15</div>
+      <div class="figure-title red">พบสินค้าที่ไม่ใช่ใน Order</div>
+      <div class="figure-file">images/15-status-wrong-product.png</div>
+      <div class="figure-spec">ให้เห็นข้อความแจ้งเตือนสินค้าผิดและกรอบตรวจจับของสินค้าที่ไม่อยู่ใน Order</div>
+    </div>
+  </div>
+
+  <div class="callout danger">
+    <strong>เมื่อ AI นับผิด</strong>
+    1) กดปิดหน้าต่างตรวจนับ 2) แจ้ง Copter 3) นับด้วยมือและเทียบกับใบ Pack 4) แพ็กต่อเมื่อมั่นใจว่าชนิดและจำนวนถูกต้อง
+  </div>
+
+  <div class="callout note">
+    <strong>อย่าตัดสินจากใบปะหน้า</strong>
+    การพิมพ์ใบปะหน้าและการตรวจนับทำงานคู่ขนานกัน ใบปะหน้าอาจออกก่อน AI แสดงผลสุดท้าย
+  </div>
+</section>
+
+<section class="page">
+  <h2>6. การพิมพ์ใบปะหน้า</h2>
+  <p>ระบบตรวจรูปแบบเลข Order แล้วส่งงานไปยังแท็บ Shopee, TikTok, Odoo หรือ Lazada ที่เปิดและ Login ไว้ เครื่องหน้างานใช้ Silent Print จึงไม่ต้องกดปุ่ม Print ในหน้าต่างระบบ</p>
+
+  <div class="figure-grid">
+    <!-- IMAGE 16: Shopee Auto Print -->
+    <div class="figure-slot">
+      <div class="figure-number">16</div>
+      <div class="figure-title">สถานะ Auto Print บน Shopee</div>
+      <div class="figure-file">images/16-shopee-auto-print.png</div>
+      <div class="figure-spec">จับหน้าที่ใช้จริงหลังรับ Order ให้เห็นข้อความสถานะของสคริปต์และผลการค้นหา</div>
+      <div class="figure-privacy">ปิดบังบัญชี ลูกค้า และเลข Order</div>
+    </div>
+    <!-- IMAGE 17: TikTok Auto Print -->
+    <div class="figure-slot">
+      <div class="figure-number">17</div>
+      <div class="figure-title">สถานะ Auto Print บน TikTok</div>
+      <div class="figure-file">images/17-tiktok-auto-print.png</div>
+      <div class="figure-spec">ให้เห็นข้อความสถานะระหว่างค้นหา เลือก Order หรือเตรียมเอกสาร A6</div>
+      <div class="figure-privacy">ปิดบังบัญชี ลูกค้า และเลข Order</div>
+    </div>
+    <!-- IMAGE 18: Odoo Auto Print -->
+    <div class="figure-slot">
+      <div class="figure-number">18</div>
+      <div class="figure-title">สถานะ Auto Print บน Odoo</div>
+      <div class="figure-file">images/18-odoo-auto-print.png</div>
+      <div class="figure-spec">ให้เห็นว่าแท็บอยู่หน้า Sales พร้อมข้อความค้นหา/เปิด Order และหน้าพิมพ์ใบปะหน้า</div>
+      <div class="figure-privacy">ปิดบังลูกค้าและข้อมูล Order</div>
+    </div>
+    <!-- IMAGE 19: Lazada Auto Print -->
+    <div class="figure-slot">
+      <div class="figure-number">19</div>
+      <div class="figure-title">สถานะ Auto Print บน Lazada</div>
+      <div class="figure-file">images/19-lazada-auto-print.png</div>
+      <div class="figure-spec">จับหน้าที่ระบบค้นหา Order และเปิดส่วนพิมพ์ฉลากจัดส่ง ให้ข้อความสถานะอ่านได้ชัด</div>
+      <div class="figure-privacy">ปิดบังบัญชี ลูกค้า และเลข Order</div>
+    </div>
+  </div>
+
+  <h3>สิ่งที่พนักงานต้องสังเกต</h3>
+  <ul>
+    <li>Browser แสดงข้อความสถานะของช่องทางที่กำลังค้นหา</li>
+    <li>ขณะขึ้นข้อความกำลังทำงาน ให้รอจนจบ ห้ามสแกน Order ใหม่</li>
+    <li>ฉลากควรออกจาก Printer หลังเว็บค้นหาและเปิดเอกสารสำเร็จ</li>
+    <li>หากมีคำว่า <code>Error</code> ให้ใช้ขั้นตอนแก้ปัญหาในหัวข้อถัดไป</li>
+  </ul>
+
+  <h3>กรณีใบปะหน้าพิมพ์ซ้ำ</h3>
+  <ol>
+    <li>หยุดก่อนติดฉลาก</li>
+    <li>เทียบเลข Order บนฉลากกับงานปัจจุบัน</li>
+    <li>ใช้ฉลากที่ถูกต้องเพียง 1 ใบ</li>
+    <li>ขีดฆ่าหรือทำลายฉลากส่วนเกินทันที ห้ามวางค้างไว้บนโต๊ะ</li>
+  </ol>
+
+  <!-- IMAGE 20: ฉลากออกจาก Printer -->
+  <div class="figure-slot wide">
+    <div class="figure-number">20</div>
+    <div class="figure-title">ใบปะหน้าออกจาก Printer</div>
+    <div class="figure-file">images/20-label-output.jpg</div>
+    <div class="figure-spec">ถ่ายให้เห็นฉลากออกจาก Printer และตำแหน่งที่พนักงานหยิบ โดยไม่ต้องให้รายละเอียดบนฉลากอ่านได้</div>
+    <div class="figure-privacy">เบลอชื่อ ที่อยู่ เบอร์โทร Barcode และเลข Tracking</div>
+  </div>
+
+  <div class="callout warn">
+    <strong>ห้ามใช้ Ctrl+V</strong>
+    พนักงานต้องเริ่มงานด้วยการสแกนผ่าน Desktop app เท่านั้น การใช้ Ctrl+V สามารถสั่งพิมพ์โดยข้ามขั้นตอนตรวจนับ AI
+  </div>
+</section>
+
+<section class="page">
+  <h2>7. ข้อห้ามและข้อควรระวัง</h2>
+  <table>
+    <tr><th>ห้าม</th><th>เหตุผล</th></tr>
+    <tr><td>ห้ามเปิดโปรแกรมจากไฟล์อื่นแทน <code>launcher.exe</code></td><td>อาจไม่ได้รับอัปเดตและใช้ไฟล์ไม่ครบ</td></tr>
+    <tr><td>ห้ามปิดเครื่องระหว่าง Launcher อัปเดต</td><td>โปรแกรมอาจติดตั้งไม่สมบูรณ์</td></tr>
+    <tr><td>ห้ามปรับ Crop หรือ Confidence</td><td>ทำให้ AI นับผิดทุก Order ถัดไป</td></tr>
+    <tr><td>ห้ามขยับกล้อง</td><td>กรอบตรวจนับและมุมภาพจะเปลี่ยน</td></tr>
+    <tr><td>ห้ามวางซองซ้อน พับ หรือออกนอกกรอบ</td><td>AI อาจนับขาดหรือตรวจผิดชนิด</td></tr>
+    <tr><td>ห้ามสแกนรัวหรือสแกนซ้ำจนกว่างานเดิมจบ</td><td>อาจเกิดงานซ้อนและฉลากซ้ำ</td></tr>
+    <tr><td>ห้ามใช้ Ctrl+V สั่งพิมพ์</td><td>เป็นการข้าม flow ตรวจนับ</td></tr>
+    <tr><td>ห้ามเก็บใบปะหน้าซ้ำไว้บนโต๊ะ</td><td>เสี่ยงติดฉลากผิดกล่อง</td></tr>
+    <tr><td>ห้ามลบ ย้าย หรือแก้ไฟล์ในโฟลเดอร์โปรแกรม</td><td>โปรแกรม โมเดล หรือระบบอัปเดตอาจเสียหาย</td></tr>
+  </table>
+</section>
+
+<section class="page">
+  <h2>8. แก้ปัญหาเบื้องต้น</h2>
+
+  <h3>Auto Print ไม่ทำงาน</h3>
+  <ol>
+    <li>ตรวจว่า Desktop app เปิดอยู่</li>
+    <li>ตรวจว่า Tampermonkey และ Auto Print script เป็น Enabled</li>
+    <li>ตรวจว่าแท็บปลายทางเปิดและ Login อยู่ โดย Odoo ต้องอยู่หน้า Sales</li>
+    <li>Refresh หน้าเว็บ</li>
+    <li>รอข้อความ <code>Scanner bridge connected</code></li>
+    <li>จึงทดลองสแกนใหม่ หากยังไม่ได้ให้แจ้ง Copter</li>
+  </ol>
+
+  <div class="figure-grid">
+    <!-- IMAGE 21: Tampermonkey script enabled -->
+    <div class="figure-slot">
+      <div class="figure-number">21</div>
+      <div class="figure-title">Tampermonkey Script เป็น Enabled</div>
+      <div class="figure-file">images/21-tampermonkey-enabled.png</div>
+      <div class="figure-spec">จับเมนู Tampermonkey ให้เห็นชื่อ Auto Print Label และสวิตช์เปิดทำงาน</div>
+    </div>
+    <!-- IMAGE 22: Scanner bridge connected -->
+    <div class="figure-slot">
+      <div class="figure-number">22</div>
+      <div class="figure-title">ข้อความ Scanner bridge connected</div>
+      <div class="figure-file">images/22-bridge-connected.png</div>
+      <div class="figure-spec">Crop ข้อความแจ้งเชื่อมต่อบนหน้าเว็บ โดยให้เห็นว่าเป็นแท็บใด</div>
+    </div>
+  </div>
+
+  <h3>กล้องหรือโมเดล AI ไม่พร้อม</h3>
+  <ol>
+    <li>ปิดโปรแกรมอื่นที่อาจใช้กล้อง เช่น Camera หรือโปรแกรมประชุม</li>
+    <li>ปิด Desktop app แล้วเปิดใหม่ผ่าน <code>launcher.exe</code> หนึ่งครั้ง</li>
+    <li>หากยังไม่พร้อม ให้แจ้ง Copter และใช้การนับมือ</li>
+  </ol>
+
+  <!-- IMAGE 23: กล้องหรือโมเดลไม่พร้อม -->
+  <div class="figure-slot wide">
+    <div class="figure-number">23</div>
+    <div class="figure-title">ตัวอย่างกล้องหรือโมเดลไม่พร้อม</div>
+    <div class="figure-file">images/23-camera-model-error.png</div>
+    <div class="figure-spec">จับข้อความ Error/สถานะที่พนักงานจะเห็นจริง พร้อมวงกรอบตำแหน่งข้อความที่ต้องสังเกต</div>
+  </div>
+
+  <h3>Odoo Offline หรือค้นหา Barcode ไม่พบ</h3>
+  <ol>
+    <li>ตรวจว่าเครื่องเชื่อมต่ออินเทอร์เน็ต</li>
+    <li>เปิดแท็บ Odoo และตรวจว่าสามารถใช้งานได้</li>
+    <li>ตรวจ Barcode บนใบ Pack แล้วสแกนใหม่หนึ่งครั้ง</li>
+    <li>หากยังไม่ได้ ให้แจ้ง Copter และนับมือตามใบ Pack</li>
+  </ol>
+
+  <!-- IMAGE 24: Odoo offline หรือไม่พบ Barcode -->
+  <div class="figure-slot wide">
+    <div class="figure-number">24</div>
+    <div class="figure-title">ตัวอย่าง Odoo Offline / ไม่พบ Barcode</div>
+    <div class="figure-file">images/24-odoo-offline-not-found.png</div>
+    <div class="figure-spec">จับสถานะ Odoo ใต้ช่อง Barcode หรือข้อความค้นหาไม่พบ ให้เห็นข้อความครบถ้วน</div>
+    <div class="figure-privacy">ปิดบัง Barcode จริง</div>
+  </div>
+</section>
+
+<section class="page">
+  <h2>8. แก้ปัญหาเบื้องต้น (ต่อ)</h2>
+
+  <h3>ระบบสำเร็จแต่ฉลากไม่ออก</h3>
+  <ol>
+    <li>ตรวจว่า Printer เปิดอยู่และไม่มีไฟ Error</li>
+    <li>ตรวจว่ามีกระดาษ ฝาปิดสนิท และไม่มีฉลากติด</li>
+    <li>ตรวจสถานะเชื่อมต่อ Printer บนเครื่อง</li>
+    <li>แก้ปัญหาพื้นฐานแล้วทดลองสแกนใหม่ได้เพียงหนึ่งครั้ง</li>
+    <li>หากยังไม่ออก ให้หยุดสแกนและแจ้ง Copter เพื่อป้องกันงานพิมพ์ค้าง</li>
+  </ol>
+
+  <!-- IMAGE 25: Printer error -->
+  <div class="figure-slot wide">
+    <div class="figure-number">25</div>
+    <div class="figure-title">ตัวอย่าง Printer ผิดปกติ</div>
+    <div class="figure-file">images/25-printer-error.jpg</div>
+    <div class="figure-spec">ถ่ายไฟ Error กระดาษหมด ฝาเปิด หรือฉลากติดอย่างใดอย่างหนึ่ง พร้อมลูกศรชี้ตำแหน่งที่ต้องตรวจ</div>
+  </div>
+
+  <h3>ใบปะหน้าออกซ้ำ</h3>
+  <ol>
+    <li>หยุดก่อนติดฉลาก</li>
+    <li>ตรวจเลข Order บนฉลากทุกใบ</li>
+    <li>ใช้เพียงหนึ่งใบ และทำลายใบที่ซ้ำ</li>
+    <li>ห้ามสแกนเพิ่มจนกว่างานปัจจุบันจะเรียบร้อย</li>
+  </ol>
+
+  <!-- IMAGE 26: วิธีทำลายฉลากซ้ำ -->
+  <div class="figure-slot wide">
+    <div class="figure-number">26</div>
+    <div class="figure-title">การจัดการใบปะหน้าที่พิมพ์ซ้ำ</div>
+    <div class="figure-file">images/26-duplicate-label.jpg</div>
+    <div class="figure-spec">ถ่ายตัวอย่างฉลากจำลองสองใบ โดยทำเครื่องหมายว่า “ใช้ 1 ใบ” และขีดฆ่าใบซ้ำให้ชัดเจน</div>
+    <div class="figure-privacy">ใช้ฉลากทดสอบเท่านั้นและเบลอข้อมูลทั้งหมด</div>
+  </div>
+
+  <table>
+    <tr><th>อาการ</th><th>ทำทันที</th><th>ถ้ายังไม่หาย</th></tr>
+    <tr><td>ไม่มี <code>Scanner bridge connected</code></td><td>เปิด app, เปิด script, Refresh</td><td>แจ้ง Copter</td></tr>
+    <tr><td>กล้องไม่ขึ้น</td><td>ปิดโปรแกรมที่ใช้กล้องและ Restart 1 ครั้ง</td><td>แจ้ง Copter และนับมือ</td></tr>
+    <tr><td>Odoo Offline</td><td>เช็ก Internet/Odoo และลอง 1 ครั้ง</td><td>แจ้ง Copter และนับมือ</td></tr>
+    <tr><td>AI นับผิด</td><td>ปิดหน้าต่างและแจ้ง Copter</td><td>ตรวจมือก่อนแพ็ก</td></tr>
+    <tr><td>ฉลากไม่ออก</td><td>เช็ก Printer และลอง 1 ครั้ง</td><td>หยุดสแกนและแจ้ง Copter</td></tr>
+  </table>
+
+  <div class="callout success">
+    <strong>หลักจำง่าย</strong>
+    1) ตรวจความพร้อม 2) สแกนหนึ่งครั้ง 3) วางซองให้ถูก 4) รอผล AI 5) รับฉลาก 6) แพ็กสินค้า
+  </div>
+  <p class="footer-note">หากไม่แน่ใจว่าระบบทำงานถูกต้องหรือไม่ ให้หยุดการสแกน Order ใหม่และแจ้ง Copter</p>
+</section>
+
+</body>
+</html>
