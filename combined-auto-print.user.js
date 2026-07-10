@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.19
+// @version      2.20
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -942,9 +942,9 @@
     GM_setValue(claimKey, TAB_ID);
     setTimeout(function () {
       if (GM_getValue(claimKey) !== TAB_ID) return; // Lost race
-      GM_deleteValue(claimKey);
 
       if (job.shop && job.shop.name && (job.platform === 'tiktok' || job.platform === 'lazada' || job.platform === 'shopee')) {
+        GM_deleteValue(claimKey);
         window.focus();
         showToast('เปลี่ยนร้านเป็น ' + job.shop.name, 'warn', true);
         return;
@@ -957,6 +957,10 @@
         if (job.platform === 'odoo')   return runOdoo(job.orderNumber);
         if (job.platform === 'lazada') return runLazada(job.orderNumber);
         return runShopee(job.orderNumber);
+      }).then(function () {
+        GM_deleteValue(claimKey);
+      }, function () {
+        GM_deleteValue(claimKey);
       });
     }, 50);
   });
@@ -1020,7 +1024,7 @@
 
           if (payload && payload.order) {
             console.log('[Auto Print Label] Scanner received JSON:', payload);
-            handleOrderInput(payload.order, payload);
+            handleOrderInput((payload.order || '').trim(), payload);
           } else {
             console.log('[Auto Print Label] Scanner received:', raw);
             handleOrderInput(raw);
