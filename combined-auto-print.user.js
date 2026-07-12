@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.17
+// @version      2.20
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -11,6 +11,8 @@
 // @match        https://sellercenter.lazada.co.th/*
 // @exclude      https://sellercenter.lazada.co.th/apps/order/print*
 // @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_deleteValue
 // @grant        GM_addValueChangeListener
 // @run-at       document-idle
 // @updateURL    https://raw.githubusercontent.com/copter-TDFB/PJ-AI-count-sachet-in-packing-line/main/combined-auto-print.user.js
@@ -19,6 +21,8 @@
 
 (function () {
   'use strict';
+
+  var TAB_ID = Date.now().toString(36) + Math.random().toString(36).slice(2);
 
   // human-feel jitter หลัง condition met (ms) — ปรับได้
   var J = {
@@ -58,7 +62,7 @@
     return new Promise(function (r) { setTimeout(r, ms); });
   }
 
-  function showToast(msg, type) {
+  function showToast(msg, type, isPersistent) {
     var el = document.getElementById('__apl_toast__');
     if (!el) {
       el = document.createElement('div');
@@ -80,8 +84,10 @@
       type === 'error' ? '#c53030' : type === 'success' ? '#276749' :
       type === 'warn'  ? '#b7791f' : '#1a202c';
     clearTimeout(el._t);
-    el._t = setTimeout(function () { el.style.opacity = '0'; },
-      type === 'error' ? 6000 : type === 'warn' ? 5000 : 3000);
+    if (!isPersistent) {
+      el._t = setTimeout(function () { el.style.opacity = '0'; },
+        type === 'error' ? 6000 : type === 'warn' ? 5000 : 3000);
+    }
   }
 
   function setReactValue(input, value) {
@@ -890,12 +896,16 @@
   // ────────────────────────────────────────────
   var NAMES = { tiktok: 'TikTok', shopee: 'Shopee', odoo: 'Odoo', lazada: 'Lazada' };
 
-  function handleOrderInput(trimmed) {
-    var orderPlatform = detectPlatform(trimmed);
+  function handleOrderInput(trimmed, v2Payload) {
+    var orderPlatform = (v2Payload && v2Payload.platform && NAMES[v2Payload.platform]) ? v2Payload.platform : detectPlatform(trimmed);
     if (!orderPlatform) return false;
 
     var sitePlatform = currentPlatform();
     if (orderPlatform === sitePlatform) {
+      if (v2Payload && v2Payload.shop && v2Payload.shop.name && (orderPlatform === 'tiktok' || orderPlatform === 'lazada' || orderPlatform === 'shopee')) {
+        showToast('เปลี่ยนร้านเป็น ' + v2Payload.shop.name, 'warn', true);
+        return true;
+      }
       withBusy(function () {
         if (orderPlatform === 'tiktok') return runTikTok(trimmed);
         if (orderPlatform === 'odoo')   return runOdoo(trimmed);
@@ -903,9 +913,12 @@
         return runShopee(trimmed);
       });
     } else {
+      var jobId = (v2Payload && v2Payload.jobId) || (Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
       GM_setValue('auto_print_job', JSON.stringify({
+        jobId: jobId,
         platform: orderPlatform,
         orderNumber: trimmed,
+        shop: v2Payload && v2Payload.shop ? v2Payload.shop : null,
         ts: Date.now(),
       }));
       showToast('ส่งไปยัง ' + NAMES[orderPlatform] + ' tab แล้ว — สลับไปดูได้เลย', 'warn');
@@ -921,14 +934,35 @@
     var job;
     try { job = JSON.parse(newVal); } catch (_) { return; }
     if (job.platform !== currentPlatform()) return;
-    window.focus();
-    showToast('[' + NAMES[job.platform] + '] รับ order จาก tab อื่น…');
-    withBusy(function () {
-      if (job.platform === 'tiktok') return runTikTok(job.orderNumber);
-      if (job.platform === 'odoo')   return runOdoo(job.orderNumber);
-      if (job.platform === 'lazada') return runLazada(job.orderNumber);
-      return runShopee(job.orderNumber);
-    });
+    if (Date.now() - job.ts > 30000) return; // 30s TTL
+
+    var claimKey = 'claim_' + job.jobId;
+    if (GM_getValue(claimKey)) return;
+
+    GM_setValue(claimKey, TAB_ID);
+    setTimeout(function () {
+      if (GM_getValue(claimKey) !== TAB_ID) return; // Lost race
+
+      if (job.shop && job.shop.name && (job.platform === 'tiktok' || job.platform === 'lazada' || job.platform === 'shopee')) {
+        GM_deleteValue(claimKey);
+        window.focus();
+        showToast('เปลี่ยนร้านเป็น ' + job.shop.name, 'warn', true);
+        return;
+      }
+
+      window.focus();
+      showToast('[' + NAMES[job.platform] + '] รับ order จาก tab อื่น…');
+      withBusy(function () {
+        if (job.platform === 'tiktok') return runTikTok(job.orderNumber);
+        if (job.platform === 'odoo')   return runOdoo(job.orderNumber);
+        if (job.platform === 'lazada') return runLazada(job.orderNumber);
+        return runShopee(job.orderNumber);
+      }).then(function () {
+        GM_deleteValue(claimKey);
+      }, function () {
+        GM_deleteValue(claimKey);
+      });
+    }, 50);
   });
 
   // ────────────────────────────────────────────
@@ -979,10 +1013,22 @@
         };
 
         ws.onmessage = function (evt) {
-          var barcode = (evt.data || '').trim();
-          if (!barcode) return;
-          console.log('[Auto Print Label] Scanner received:', barcode);
-          handleOrderInput(barcode);
+          var raw = (evt.data || '').trim();
+          if (!raw) return;
+          var payload = null;
+          try {
+            if (raw.startsWith('{')) {
+              payload = JSON.parse(raw);
+            }
+          } catch (e) {}
+
+          if (payload && payload.order) {
+            console.log('[Auto Print Label] Scanner received JSON:', payload);
+            handleOrderInput((payload.order || '').trim(), payload);
+          } else {
+            console.log('[Auto Print Label] Scanner received:', raw);
+            handleOrderInput(raw);
+          }
         };
 
         ws.onclose = function () {

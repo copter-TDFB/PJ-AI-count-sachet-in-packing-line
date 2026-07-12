@@ -19,3 +19,6 @@ snapshots/
 kernel.errors.txt
 manual_preview/
 manual-html-preview.png
+
+# pm-bridge task packets (local orchestration only)
+.pm-bridge/
