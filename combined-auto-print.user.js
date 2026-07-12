@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.21
+// @version      2.22
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -534,6 +534,236 @@
   }
 
   // ────────────────────────────────────────────
+  // SHOPEE SHOP SWITCH
+  // ────────────────────────────────────────────
+  var SHOPEE_SWITCH_JOB_KEY = 'shopee_switch_job';
+  var SHOPEE_SWITCH_TTL = 5 * 60 * 1000;
+
+  function normalizeShopText(text) {
+    return (text || '').toLowerCase().trim();
+  }
+
+  function shopTextMatches(widgetOrRowText, targetShopHint) {
+    var hint = normalizeShopText(targetShopHint);
+    return !!hint && normalizeShopText(widgetOrRowText).includes(hint);
+  }
+
+  function visibleText(el) {
+    return ((el && (el.innerText || el.textContent)) || '').trim();
+  }
+
+  function findCurrentShopeeShop() {
+    var candidates = Array.from(document.querySelectorAll('button, a, [role="button"], div'));
+    var minLeft = typeof window.innerWidth === 'number' ? window.innerWidth * 0.55 : 0;
+    return candidates.map(function (el) {
+      var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+      if (rect && ((rect.width <= 0 || rect.height <= 0) || rect.left < minLeft || rect.top > 220)) return null;
+      var lines = visibleText(el).split(/\n+/).map(function (line) { return line.trim(); }).filter(Boolean);
+      if (lines.length < 2 || lines.length > 4) return null;
+      return { element: el, name: lines[0], top: rect ? rect.top : 0, left: rect ? rect.left : 0 };
+    }).filter(Boolean).sort(function (a, b) {
+      return a.top - b.top || b.left - a.left;
+    })[0] || null;
+  }
+
+  function findExactShopeeControl(text) {
+    var target = (text || '').trim();
+    return Array.from(document.querySelectorAll('button, a, [role="button"], [role="menuitem"], span')).find(function (el) {
+      return visibleText(el) === target;
+    }) || null;
+  }
+
+  function findAllShopeeControls(text) {
+    var target = (text || '').trim();
+    return Array.from(document.querySelectorAll('button, a, [role="button"], [role="menuitem"], span')).filter(function (el) {
+      return visibleText(el) === target;
+    });
+  }
+
+  function waitForShopeeValue(find, label, timeout) {
+    timeout = timeout || 8000;
+    return new Promise(function (resolve, reject) {
+      var deadline = Date.now() + timeout;
+      function check() {
+        var value = find();
+        if (value) return resolve(value);
+        if (Date.now() > deadline) return reject(new Error('Timeout: ' + label));
+        setTimeout(check, 50);
+      }
+      check();
+    });
+  }
+
+  function findShopeeShopRow(targetShopHint) {
+    var detailsLinks = findAllShopeeControls('รายละเอียด');
+    for (var i = 0; i < detailsLinks.length; i++) {
+      for (var row = detailsLinks[i], depth = 0; row && depth < 6; row = row.parentElement, depth++) {
+        if (shopTextMatches(visibleText(row), targetShopHint)) {
+          return detailsLinks[i];
+        }
+      }
+    }
+    return null;
+  }
+
+  function getShopeeSwitchJob() {
+    var raw = GM_getValue(SHOPEE_SWITCH_JOB_KEY);
+    if (!raw) return null;
+    try {
+      var job = JSON.parse(raw);
+      if (!job.expiresAt || Date.now() >= job.expiresAt) {
+        GM_deleteValue(SHOPEE_SWITCH_JOB_KEY);
+        return null;
+      }
+      return job;
+    } catch (_) {
+      GM_deleteValue(SHOPEE_SWITCH_JOB_KEY);
+      return null;
+    }
+  }
+
+  function saveShopeeSwitchJob(job, step) {
+    job.step = step;
+    GM_setValue(SHOPEE_SWITCH_JOB_KEY, JSON.stringify(job));
+  }
+
+  function failShopeeSwitch(job) {
+    GM_deleteValue(SHOPEE_SWITCH_JOB_KEY);
+    showToast('เปลี่ยนร้านเป็น ' + job.targetShopHint, 'warn', true);
+  }
+
+  function detectShopeeSwitchStep(expectedStep) {
+    // Do not infer an orders page before the initial profile click: the old shop's
+    // orders page has the same controls as the destination page.
+    if (expectedStep !== 'open_profile' && visibleText(document.body).includes('เลือกร้านที่จะจัดการ')) return 'shop_list';
+    if (expectedStep === 'profile_clicked' && findExactShopeeControl('สลับร้านค้า')) return 'profile_clicked';
+    if ((expectedStep === 'orders_opened' || expectedStep === 'orders_page') && findAllShopeeControls('ทั้งหมด').length >= 3) return 'orders_page';
+    if ((expectedStep === 'shop_selected' || expectedStep === 'orders_opened') && findExactShopeeControl('คำสั่งซื้อของฉัน')) return 'orders_opened';
+    if (expectedStep === 'shop_selected' && findExactShopeeControl('คำสั่งซื้อ')) return 'shop_selected';
+    return null;
+  }
+
+  async function runShopeeSwitchJob(job) {
+    if (Date.now() >= job.expiresAt) {
+      GM_deleteValue(SHOPEE_SWITCH_JOB_KEY);
+      return;
+    }
+
+    var actualStep = detectShopeeSwitchStep(job.step);
+    if (actualStep && actualStep !== job.step) saveShopeeSwitchJob(job, actualStep);
+
+    try {
+      if (job.step === 'open_profile') {
+        var profile = await waitForShopeeValue(findCurrentShopeeShop, 'shop profile', 8000);
+        saveShopeeSwitchJob(job, 'profile_clicked');
+        await sleep(jitter(J.click));
+        profile.element.click();
+        return runShopeeSwitchJob(job);
+      }
+
+      if (job.step === 'profile_clicked') {
+        var switchShop = await waitForShopeeValue(function () {
+          return findExactShopeeControl('สลับร้านค้า');
+        }, 'สลับร้านค้า', 8000);
+        saveShopeeSwitchJob(job, 'shop_list');
+        await sleep(jitter(J.click));
+        switchShop.click();
+        await waitForShopeeValue(function () {
+          return visibleText(document.body).includes('เลือกร้านที่จะจัดการ');
+        }, 'เลือกร้านที่จะจัดการ', 10000);
+        return runShopeeSwitchJob(job);
+      }
+
+      if (job.step === 'shop_list') {
+        await waitForShopeeValue(function () {
+          return visibleText(document.body).includes('เลือกร้านที่จะจัดการ');
+        }, 'เลือกร้านที่จะจัดการ', 10000);
+        var details = await waitForShopeeValue(function () {
+          return findShopeeShopRow(job.targetShopHint);
+        }, 'รายละเอียด ' + job.targetShopHint, 8000);
+        saveShopeeSwitchJob(job, 'shop_selected');
+        await sleep(jitter(J.click));
+        details.click();
+        await waitForShopeeValue(function () {
+          return findExactShopeeControl('คำสั่งซื้อ');
+        }, 'คำสั่งซื้อ', 10000);
+        return runShopeeSwitchJob(job);
+      }
+
+      if (job.step === 'shop_selected') {
+        var orders = await waitForShopeeValue(function () {
+          return findExactShopeeControl('คำสั่งซื้อ');
+        }, 'คำสั่งซื้อ', 8000);
+        saveShopeeSwitchJob(job, 'orders_opened');
+        await sleep(jitter(J.click));
+        orders.click();
+        await waitForShopeeValue(function () {
+          return findExactShopeeControl('คำสั่งซื้อของฉัน');
+        }, 'คำสั่งซื้อของฉัน', 10000);
+        return runShopeeSwitchJob(job);
+      }
+
+      if (job.step === 'orders_opened') {
+        var myOrders = await waitForShopeeValue(function () {
+          return findExactShopeeControl('คำสั่งซื้อของฉัน');
+        }, 'คำสั่งซื้อของฉัน', 8000);
+        saveShopeeSwitchJob(job, 'orders_page');
+        await sleep(jitter(J.click));
+        myOrders.click();
+        await waitForShopeeValue(function () {
+          return findAllShopeeControls('ทั้งหมด').length >= 3;
+        }, 'ทั้งหมด', 10000);
+        return runShopeeSwitchJob(job);
+      }
+
+      if (job.step === 'orders_page') {
+        var allFilters = await waitForShopeeValue(function () {
+          var controls = findAllShopeeControls('ทั้งหมด');
+          return controls.length >= 3 ? controls.slice(0, 3) : null;
+        }, 'ทั้งหมด', 8000);
+        for (var i = 0; i < allFilters.length; i++) {
+          await sleep(jitter(J.click));
+          allFilters[i].click();
+        }
+        var currentShop = await waitForShopeeValue(findCurrentShopeeShop, 'shop profile', 8000);
+        if (!shopTextMatches(currentShop.name, job.targetShopHint)) {
+          throw new Error('Switched shop does not match target');
+        }
+        GM_deleteValue(SHOPEE_SWITCH_JOB_KEY);
+        return runShopee(job.orderNumber);
+      }
+
+      throw new Error('Unknown switch step: ' + job.step);
+    } catch (err) {
+      console.error('[AutoPrint Shopee switch]', err);
+      failShopeeSwitch(job);
+    }
+  }
+
+  function startShopeeSwitch(orderNumber, targetShopHint) {
+    var job = {
+      jobId: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      orderNumber: orderNumber,
+      targetShopHint: targetShopHint,
+      step: 'open_profile',
+      expiresAt: Date.now() + SHOPEE_SWITCH_TTL,
+    };
+    GM_setValue(SHOPEE_SWITCH_JOB_KEY, JSON.stringify(job));
+    withBusy(function () { return runShopeeSwitchJob(job); });
+  }
+
+  function handleShopeeShopRequirement(orderNumber, targetShopHint) {
+    var currentShop = findCurrentShopeeShop();
+    if (currentShop && shopTextMatches(currentShop.name, targetShopHint)) return false;
+    if (!currentShop) {
+      showToast('เปลี่ยนร้านเป็น ' + targetShopHint, 'warn', true);
+      return true;
+    }
+    startShopeeSwitch(orderNumber, targetShopHint);
+    return true;
+  }
+
+  // ────────────────────────────────────────────
   // LAZADA AUTOMATION
   // ────────────────────────────────────────────
   async function runLazada(orderNumber) {
@@ -891,6 +1121,13 @@
     try { await fn(); } finally { _busy = false; }
   }
 
+  if (currentPlatform() === 'shopee') {
+    var pendingShopeeSwitch = getShopeeSwitchJob();
+    if (pendingShopeeSwitch) {
+      withBusy(function () { return runShopeeSwitchJob(pendingShopeeSwitch); });
+    }
+  }
+
   // ────────────────────────────────────────────
   // SHARED ORDER DISPATCHER
   // ────────────────────────────────────────────
@@ -903,8 +1140,7 @@
     var sitePlatform = currentPlatform();
     if (orderPlatform === sitePlatform) {
       if (v2Payload && v2Payload.shop && v2Payload.shop.name && orderPlatform === 'shopee') {
-        showToast('เปลี่ยนร้านเป็น ' + v2Payload.shop.name, 'warn', true);
-        return true;
+        if (handleShopeeShopRequirement(trimmed, v2Payload.shop.name)) return true;
       }
       withBusy(function () {
         if (orderPlatform === 'tiktok') return runTikTok(trimmed);
@@ -944,10 +1180,11 @@
       if (GM_getValue(claimKey) !== TAB_ID) return; // Lost race
 
       if (job.shop && job.shop.name && job.platform === 'shopee') {
-        GM_deleteValue(claimKey);
         window.focus();
-        showToast('เปลี่ยนร้านเป็น ' + job.shop.name, 'warn', true);
-        return;
+        if (handleShopeeShopRequirement(job.orderNumber, job.shop.name)) {
+          GM_deleteValue(claimKey);
+          return;
+        }
       }
 
       window.focus();
