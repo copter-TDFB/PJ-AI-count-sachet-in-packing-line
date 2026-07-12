@@ -44,7 +44,18 @@ function makeEnvironment(initialPhase) {
   const myOrders = makeElement('คำสั่งซื้อของฉัน', () => {
     clicks.push('my-orders'); phase = 'orders-page';
   });
-  const allFilters = [0, 1, 2].map((n) => makeElement('ทั้งหมด', () => clicks.push(`all-${n}`)));
+  let filterGeneration = 0;
+  function allFilters() {
+    const generation = filterGeneration;
+    return [0, 1, 2].map((n) => makeElement('ทั้งหมด', () => {
+      if (generation !== filterGeneration) {
+        clicks.push(`stale-${n}`);
+        return;
+      }
+      clicks.push(`all-${n}`);
+      filterGeneration += 1;
+    }));
+  }
   const printButton = makeElement('พิมพ์ใบปะหน้า', () => clicks.push('print'));
   const input = makeElement('', () => {});
   input.focus = () => events.push('run-search');
@@ -64,7 +75,7 @@ function makeEnvironment(initialPhase) {
     if (phase === 'list') return [details];
     if (phase === 'dashboard') return [orders];
     if (phase === 'submenu') return [myOrders];
-    if (phase === 'orders-page') return [...allFilters, profile, printButton];
+    if (phase === 'orders-page') return [...allFilters(), profile, printButton];
     return [profile];
   }
 
@@ -149,9 +160,11 @@ async function runStep(step, phase, expectedClick) {
   nodeConsole.log('PASS TTL: expired job is cleared and never clicks');
 
   const final = await runStep('orders_page', 'orders-page', 'all-0');
+  assert.deepStrictEqual(final.env.clicks.slice(0, 3), ['all-0', 'all-1', 'all-2'], 'filters must be re-queried after each React re-render');
   const firstSearch = final.env.events.indexOf('run-search');
   assert.ok(final.cleared >= 0 && firstSearch >= 0, 'final flow should clear then invoke normal Shopee search/print');
   assert.ok(final.cleared < firstSearch, 'switch job must be deleted before normal Shopee search begins');
+  nodeConsole.log('PASS filters: each All control is re-queried after a re-render');
   nodeConsole.log('PASS clearing: switch job is deleted before normal Shopee search/print runs');
 })().catch((err) => {
   process.stderr.write(`FAIL ${err.stack}\n`);

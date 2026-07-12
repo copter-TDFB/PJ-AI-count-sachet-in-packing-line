@@ -717,13 +717,14 @@
       }
 
       if (job.step === 'orders_page') {
-        var allFilters = await waitForShopeeValue(function () {
+        await waitForShopeeValue(function () {
           var controls = findAllShopeeControls('ทั้งหมด');
-          return controls.length >= 3 ? controls.slice(0, 3) : null;
+          return controls.length >= 3 ? controls : null;
         }, 'ทั้งหมด', 8000);
-        for (var i = 0; i < allFilters.length; i++) {
+        for (var i = 0; i < 3; i++) {
           await sleep(jitter(J.click));
-          allFilters[i].click();
+          var currentFilter = findAllShopeeControls('ทั้งหมด')[i];
+          if (currentFilter) currentFilter.click();
         }
         var currentShop = await waitForShopeeValue(findCurrentShopeeShop, 'shop profile', 8000);
         if (!shopTextMatches(currentShop.name, job.targetShopHint)) {
