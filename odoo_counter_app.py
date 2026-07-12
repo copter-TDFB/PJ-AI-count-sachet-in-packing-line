@@ -26,6 +26,7 @@ ODOO_URL      = 'https://tdfb.odoo.com'
 ODOO_DB       = 'tdfb'
 ODOO_USER     = 'operation.engineer@tdfb.co'
 ODOO_PASSWORD = 'KBT123'
+SHOP_IDENTITY_FIELD = 'x_studio_sender_name'  # sale.order many2one — validated against real data, see KAN-53 spike
 
 def _get_base_dir() -> Path:
     if getattr(sys, 'frozen', False):
@@ -102,7 +103,7 @@ class BarcodeWorker(QThread):
     data_ready     = pyqtSignal(dict)
     not_found      = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
-    origin_ready   = pyqtSignal(str)  # fire ทันทีที่เจอ picking ใน Odoo (มี/ไม่มีสินค้า 3g ก็ส่ง)
+    origin_ready   = pyqtSignal(str, object)  # fire ทันทีที่เจอ picking ใน Odoo (มี/ไม่มีสินค้า 3g ก็ส่ง)
 
     def __init__(self, barcode: str):
         super().__init__()
@@ -119,7 +120,7 @@ class BarcodeWorker(QThread):
                 [[['x_studio_tracking_no', '=', self.barcode],
                   ['picking_type_id.name', 'ilike', 'Pack'],
                   ['state', '=', 'assigned']]],
-                {'fields': ['name', 'x_studio_tracking_no', 'partner_id', 'state', 'origin'], 'limit': 1}
+                {'fields': ['name', 'x_studio_tracking_no', 'partner_id', 'state', 'origin', 'sale_id'], 'limit': 1}
             )
             if not pickings:
                 self.not_found.emit(self.barcode)
@@ -127,8 +128,27 @@ class BarcodeWorker(QThread):
 
             picking = pickings[0]
             origin = (picking.get('origin') or '').strip() if isinstance(picking.get('origin'), str) else ''
+            shop = None
+            try:
+                sale_id = picking.get('sale_id')
+                if isinstance(sale_id, (list, tuple)) and sale_id and isinstance(sale_id[0], int):
+                    sale = models.execute_kw(
+                        ODOO_DB, uid, ODOO_PASSWORD,
+                        'sale.order', 'read', [[sale_id[0]]],
+                        {'fields': [SHOP_IDENTITY_FIELD]}
+                    )
+                    if sale:
+                        value = sale[0].get(SHOP_IDENTITY_FIELD)
+                        if isinstance(value, (list, tuple)) and len(value) >= 2 and isinstance(value[0], int):
+                            name = str(value[1] or '').strip()
+                            if name:
+                                shop = {'id': value[0], 'name': name}
+                        elif isinstance(value, str) and value.strip():
+                            shop = {'id': 0, 'name': value.strip()}
+            except Exception:
+                pass
             if origin:
-                self.origin_ready.emit(origin)
+                self.origin_ready.emit(origin, shop)
 
             moves = models.execute_kw(
                 ODOO_DB, uid, ODOO_PASSWORD,
@@ -1517,21 +1537,22 @@ class BarcodeBridgeWorker(QObject):
         n = len(self._clients)
         self.status_changed.emit('ok', f"พร้อม ({n} tabs)")
 
-    def broadcast(self, barcode: str):
+    def broadcast(self, order: str, shop=None):
         """Call from Qt thread — schedules broadcast in asyncio loop."""
         if not self._loop or not self._loop.is_running():
             return
-        asyncio.run_coroutine_threadsafe(self._broadcast_async(barcode), self._loop)
+        asyncio.run_coroutine_threadsafe(self._broadcast_async(order, shop), self._loop)
 
-    async def _broadcast_async(self, barcode: str):
+    async def _broadcast_async(self, order: str, shop):
+        payload = json.dumps({'order': order, 'platform': None, 'shop': shop})
         if not self._clients:
-            print(f"[Bridge] no clients — barcode dropped: {barcode!r}")
+            print(f"[Bridge] no clients — order dropped: {order!r}")
             return
         await asyncio.gather(
-            *[c.send(barcode) for c in self._clients],
+            *[c.send(payload) for c in self._clients],
             return_exceptions=True,
         )
-        print(f"[Bridge] sent {barcode!r} → {len(self._clients)} client(s)")
+        print(f"[Bridge] sent {payload!r} → {len(self._clients)} client(s)")
 
     def stop(self):
         if self._loop and self._loop.is_running():
