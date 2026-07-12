@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Print Label (Shopee + TikTok + Odoo + Lazada)
 // @namespace    http://tampermonkey.net/
-// @version      2.20
+// @version      2.21
 // @description  Ctrl+V เลข order → auto-print ใบปะหน้า (รองรับ Shopee + TikTok + Odoo + Lazada)
 // @author       copter-TDFB
 // @match        https://seller.shopee.co.th/*
@@ -902,7 +902,7 @@
 
     var sitePlatform = currentPlatform();
     if (orderPlatform === sitePlatform) {
-      if (v2Payload && v2Payload.shop && v2Payload.shop.name && (orderPlatform === 'tiktok' || orderPlatform === 'lazada' || orderPlatform === 'shopee')) {
+      if (v2Payload && v2Payload.shop && v2Payload.shop.name && orderPlatform === 'shopee') {
         showToast('เปลี่ยนร้านเป็น ' + v2Payload.shop.name, 'warn', true);
         return true;
       }
@@ -943,7 +943,7 @@
     setTimeout(function () {
       if (GM_getValue(claimKey) !== TAB_ID) return; // Lost race
 
-      if (job.shop && job.shop.name && (job.platform === 'tiktok' || job.platform === 'lazada' || job.platform === 'shopee')) {
+      if (job.shop && job.shop.name && job.platform === 'shopee') {
         GM_deleteValue(claimKey);
         window.focus();
         showToast('เปลี่ยนร้านเป็น ' + job.shop.name, 'warn', true);
