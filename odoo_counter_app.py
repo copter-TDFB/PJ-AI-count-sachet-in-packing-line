@@ -456,6 +456,7 @@ class CameraWorker(QThread):
     frame_ready        = pyqtSignal(QImage, object)
     status_message     = pyqtSignal(str)
     model_ready        = pyqtSignal(str)
+    camera_error       = pyqtSignal(str)
     image_infer_done   = pyqtSignal(QImage, object)
     image_infer_error  = pyqtSignal(str)
     raw_frame_ready    = pyqtSignal(QImage)  # ส่งภาพ pre-inference สำหรับหน้า crop settings
@@ -535,17 +536,24 @@ class CameraWorker(QThread):
         dummy = np.zeros((640, 640, 3), dtype=np.uint8)
         for _ in range(5):
             model(dummy, verbose=False)
-        self.status_message.emit(f"โหลด {loaded_name} สำเร็จ — รอสแกน Barcode")
-        self.model_ready.emit(loaded_name)
+        self.status_message.emit(f"โหลด {loaded_name} สำเร็จ — กำลังเปิดกล้อง...")
 
         # MSMF (Media Foundation) ใช้ Windows Frame Server — แชร์กล้องกับ OBS/แอปอื่นได้
         cap = cv2.VideoCapture(self.camera_id, cv2.CAP_MSMF)
         if not cap.isOpened():
             print("[Camera] MSMF เปิดไม่ได้ — fallback เป็น default backend", flush=True)
             cap = cv2.VideoCapture(self.camera_id)
+        if not cap.isOpened():
+            self.camera_error.emit(
+                f"เปิดกล้องไม่ได้ (camera_id={self.camera_id}) — เช็คสาย/driver หรือโปรแกรมอื่นที่ใช้กล้องอยู่"
+            )
+            return
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        self.status_message.emit(f"โหลด {loaded_name} สำเร็จ — รอสแกน Barcode")
+        self.model_ready.emit(loaded_name)
 
         state = {'annotated': None, 'class_counts': {}, 'new': False}
         lock  = threading.Lock()
@@ -1684,6 +1692,7 @@ class MainWindow(QMainWindow):
         self._camera_worker.frame_ready.connect(self._on_frame)
         self._camera_worker.status_message.connect(self.lbl_status.setText)
         self._camera_worker.model_ready.connect(self._on_model_ready)
+        self._camera_worker.camera_error.connect(self._on_camera_error)
         self._camera_worker.image_infer_done.connect(self._counter_panel._on_image_result)
         self._camera_worker.image_infer_error.connect(self._counter_panel._on_infer_error)
         self._counter_panel.image_infer_requested.connect(self._camera_worker.infer_image)
@@ -1701,6 +1710,10 @@ class MainWindow(QMainWindow):
         color = "#FF9800" if "openvino" in name.lower() else "#4CAF50"
         self.lbl_status.setText(f"Model: {name}  ●  กล้องพร้อม — รอสแกน Barcode")
         self.lbl_status.setStyleSheet(f"color:{color}; font-size:12px; font-weight:bold;")
+
+    def _on_camera_error(self, msg: str):
+        self.lbl_status.setStyleSheet("color:#EF5350; font-size:12px; font-weight:bold;")
+        self.lbl_status.setText(f"⚠ กล้องไม่พร้อม — {msg}")
 
     def _on_frame(self, qimg: QImage, class_counts: dict):
         if self._counter_panel.isVisible():
