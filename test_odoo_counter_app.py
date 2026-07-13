@@ -24,8 +24,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
 
-ODOO_URL      = 'https://tdfb-02072026-test.odoo.com'
-ODOO_DB       = 'tdfb-02072026-test'
+ODOO_URL      = 'https://tdfb-10072026-test.odoo.com'
+ODOO_DB       = 'tdfb-10072026-test'
 ODOO_USER     = 'operation.engineer@tdfb.co'
 ODOO_PASSWORD = 'KBT123'
 
@@ -156,6 +156,7 @@ class BarcodeWorker(QThread):
     invoice_creating       = pyqtSignal()     # fire ก่อนเรียก Odoo สร้าง+post invoice — ใช้บล็อกสแกนชั่วคราว
     invoice_create_unblock = pyqtSignal()     # fire ทันทีที่เรียก Odoo สร้าง+post เสร็จ (สำเร็จหรือพัง) — ปลดบล็อกสแกน
     invoice_create_failed  = pyqtSignal(str)  # fire เมื่อสร้าง/post ไม่สำเร็จ — ส่ง error message
+    invoice_pending        = pyqtSignal(int, int, str)  # picking_id, sale_order_id, picking_name
 
     def __init__(self, barcode: str):
         super().__init__()
@@ -184,6 +185,8 @@ class BarcodeWorker(QThread):
                 self.origin_ready.emit(origin)
 
             sale_id = picking.get('sale_id')
+            if sale_id:
+                self.invoice_pending.emit(picking['id'], sale_id[0], picking['name'])
 
             moves = models.execute_kw(
                 ODOO_DB, uid, ODOO_PASSWORD,
@@ -218,7 +221,6 @@ class BarcodeWorker(QThread):
                     )
                 else:
                     self.not_found.emit(f"{picking['name']} — ไม่มี moves ที่ยังไม่เสร็จในใบนี้เลย")
-                self._maybe_fetch_invoice(models, uid, sale_id)
                 return
 
             # ดึงเลข lot + วันหมดอายุ จาก stock.move.line — แยกตาม product
@@ -274,20 +276,10 @@ class BarcodeWorker(QThread):
                 pass  # ไม่มี lot ก็ไม่เป็นไร ให้ดำเนินการต่อ
 
             self.data_ready.emit({'picking': picking, 'moves': moves, 'lots_by_product': lots_by_product})
-            self._maybe_fetch_invoice(models, uid, sale_id)
 
         except Exception as e:
             OdooConn.reset()
             self.error_occurred.emit(str(e))
-
-    def _maybe_fetch_invoice(self, models, uid, sale_id):
-        """Runs after the counting popup's own signal already fired — never blocks it (KAN-70 demo)."""
-        if not sale_id:
-            return
-        try:
-            self._fetch_invoice_pdf(models, uid, sale_id[0])
-        except Exception as e:
-            print(f"[Invoice] ข้าม (sale order {sale_id[0]}): {e}", flush=True)
 
     def _create_and_post_invoice(self, models, uid, sale_order_id: int) -> list | None:
         """Auto-invoice creation (test tenant only): sale order has zero invoices — create one via
@@ -418,6 +410,43 @@ class BarcodeWorker(QThread):
             self.invoice_pdf_ready.emit(str(path))
         else:
             self.invoice_pdf_failed.emit(invoice_name)
+
+
+class InvoiceAfterValidateWorker(BarcodeWorker):
+    """Wait for the scanned Pack picking to become done, then run the existing invoice flow."""
+    picking_done    = pyqtSignal(str)
+    picking_timeout = pyqtSignal(str)
+
+    def __init__(self, picking_id: int, sale_order_id: int, picking_name: str, timeout_seconds: int = 30):
+        super().__init__('')
+        self.picking_id = picking_id
+        self.sale_order_id = sale_order_id
+        self.picking_name = picking_name
+        self.timeout_seconds = timeout_seconds
+
+    def run(self):
+        try:
+            OdooConn.ensure()
+            uid, models = OdooConn._uid, OdooConn._models
+            deadline = time.monotonic() + self.timeout_seconds
+
+            while time.monotonic() < deadline:
+                pickings = models.execute_kw(
+                    ODOO_DB, uid, ODOO_PASSWORD,
+                    'stock.picking', 'read',
+                    [[self.picking_id]],
+                    {'fields': ['state']}
+                )
+                if pickings and pickings[0].get('state') == 'done':
+                    self.picking_done.emit(self.picking_name)
+                    self._fetch_invoice_pdf(models, uid, self.sale_order_id)
+                    return
+                self.msleep(1000)
+
+            self.picking_timeout.emit(self.picking_name)
+        except Exception as e:
+            OdooConn.reset()
+            self.invoice_create_failed.emit(str(e))
 
 
 # ── Worker: บันทึก log note กลับ Odoo ───────────────────────
@@ -1679,6 +1708,7 @@ class BarcodeBridgeWorker(QObject):
     PORT = 9999
 
     status_changed = pyqtSignal(str, str)  # state ∈ {"ok","fail","starting"}, message
+    validate_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -1712,7 +1742,13 @@ class BarcodeBridgeWorker(QObject):
         self._clients.add(websocket)
         self._emit_client_count()
         try:
-            await websocket.wait_closed()
+            async for raw in websocket:
+                try:
+                    payload = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if payload.get('type') == 'odoo_validate_clicked':
+                    self.validate_requested.emit()
         finally:
             self._clients.discard(websocket)
             self._emit_client_count()
@@ -1754,6 +1790,8 @@ class MainWindow(QMainWindow):
         self._counter_panel.closed.connect(self._on_counter_closed)
         self._camera_worker = None
         self._workers: set  = set()
+        self._pending_invoice: dict | None = None
+        self._invoice_worker: InvoiceAfterValidateWorker | None = None
 
         self._barcode_listener = GlobalBarcodeListener()
         self._barcode_listener.barcode_ready.connect(self._on_barcode_scanned)
@@ -1769,6 +1807,7 @@ class MainWindow(QMainWindow):
 
         self._bridge = BarcodeBridgeWorker()
         self._bridge.status_changed.connect(self._on_bridge_status)
+        self._bridge.validate_requested.connect(self._on_validate_requested)
         self._bridge.start()
 
         threading.Thread(target=self._preconnect_odoo, daemon=True).start()
@@ -1919,15 +1958,55 @@ class MainWindow(QMainWindow):
         w.not_found.connect(self._on_not_found)
         w.error_occurred.connect(self._on_error)
         w.origin_ready.connect(self._bridge.broadcast)
+        w.invoice_pending.connect(self._on_invoice_pending)
+        w.finished.connect(lambda: self._workers.discard(w))
+        self._workers.add(w)
+        w.start()
+
+    def _on_invoice_pending(self, picking_id: int, sale_order_id: int, picking_name: str):
+        self._pending_invoice = {
+            'picking_id': picking_id,
+            'sale_order_id': sale_order_id,
+            'picking_name': picking_name,
+        }
+
+    def _on_validate_requested(self):
+        if not self._pending_invoice:
+            print('[Invoice] ได้รับ Validate event แต่ไม่มี Pack ที่รออยู่', flush=True)
+            return
+        if self._invoice_worker and self._invoice_worker.isRunning():
+            return
+
+        pending = self._pending_invoice
+        w = InvoiceAfterValidateWorker(
+            pending['picking_id'], pending['sale_order_id'], pending['picking_name']
+        )
+        w.picking_done.connect(self._on_picking_done)
+        w.picking_timeout.connect(self._on_picking_timeout)
         w.invoice_pdf_fetching.connect(self._on_invoice_pdf_fetching)
         w.invoice_pdf_ready.connect(self._on_invoice_pdf_ready)
         w.invoice_pdf_failed.connect(self._on_invoice_pdf_failed)
         w.invoice_creating.connect(self._on_invoice_creating)
         w.invoice_create_unblock.connect(self._on_invoice_create_unblock)
         w.invoice_create_failed.connect(self._on_invoice_create_failed)
-        w.finished.connect(lambda: self._workers.discard(w))
-        self._workers.add(w)
+        w.finished.connect(self._on_invoice_worker_finished)
+        self._invoice_worker = w
+        self.lbl_status.setStyleSheet("color:#888; font-size:12px;")
+        self.lbl_status.setText(f"กำลังรอ Odoo ยืนยันว่า {pending['picking_name']} เสร็จแล้ว...")
         w.start()
+
+    def _on_picking_done(self, picking_name: str):
+        if self._pending_invoice and self._pending_invoice['picking_name'] == picking_name:
+            self._pending_invoice = None
+        self.lbl_status.setStyleSheet("color:#4CAF50; font-size:12px; font-weight:bold;")
+        self.lbl_status.setText(f"{picking_name} เป็น Done แล้ว — กำลังตรวจใบกำกับภาษี...")
+
+    def _on_picking_timeout(self, picking_name: str):
+        self.lbl_status.setStyleSheet("color:#EF9A9A; font-size:12px;")
+        self.lbl_status.setText(f"ยังไม่พบว่า {picking_name} เป็น Done — กด Validate แล้วลองอีกครั้ง")
+
+    def _on_invoice_worker_finished(self):
+        self._invoice_worker = None
 
     def _on_invoice_creating(self):
         self._barcode_listener.set_active(False)

@@ -8,6 +8,8 @@
 // @match        https://seller.tiktok.com/*
 // @match        https://seller-th.tiktok.com/*
 // @match        https://tdfb.odoo.com/odoo*
+// @match        https://tdfb.odoo.com/scoped_app/barcode/*
+// @match        https://tdfb-10072026-test.odoo.com/scoped_app/barcode/*
 // @match        https://sellercenter.lazada.co.th/*
 // @exclude      https://sellercenter.lazada.co.th/apps/order/print*
 // @grant        GM_setValue
@@ -46,7 +48,7 @@
     var h = location.hostname;
     if (h.includes('tiktok')) return 'tiktok';
     if (h.includes('shopee')) return 'shopee';
-    if (h === 'tdfb.odoo.com') return 'odoo';
+    if (h === 'tdfb.odoo.com' || h === 'tdfb-10072026-test.odoo.com') return 'odoo';
     if (h.includes('lazada')) return 'lazada';
     return null;
   }
@@ -566,18 +568,32 @@
     })[0] || null;
   }
 
+  // sidebar/popover ของ Shopee มักมี element ซ่อน (rect 0x0, ยังไม่ขยาย/ยังไม่ hover)
+  // ที่ text ตรงกับปุ่มจริงเป๊ะๆ — ถ้ามีตัวที่มองเห็นจริงอยู่ในกลุ่ม match ให้เลือกตัวนั้นก่อน
+  // แต่ถ้าไม่มีตัวไหนผ่าน isVisibleInput เลย (เช่นปุ่มบางแบบไม่มี box ของตัวเอง) ให้ fallback
+  // ไปตัวแรกแบบเดิม กันไม่ให้หาปุ่มไม่เจอไปเลย
+  function pickVisibleFirst(elements) {
+    for (var i = 0; i < elements.length; i++) {
+      if (isVisibleInput(elements[i])) return elements[i];
+    }
+    return elements[0] || null;
+  }
+
   function findExactShopeeControl(text) {
     var target = (text || '').trim();
-    return Array.from(document.querySelectorAll('button, a, [role="button"], [role="menuitem"], span')).find(function (el) {
+    var matches = Array.from(document.querySelectorAll('button, a, [role="button"], [role="menuitem"], span')).filter(function (el) {
       return visibleText(el) === target;
-    }) || null;
+    });
+    return pickVisibleFirst(matches);
   }
 
   function findAllShopeeControls(text) {
     var target = (text || '').trim();
-    return Array.from(document.querySelectorAll('button, a, [role="button"], [role="menuitem"], span')).filter(function (el) {
+    var matches = Array.from(document.querySelectorAll('button, a, [role="button"], [role="menuitem"], span')).filter(function (el) {
       return visibleText(el) === target;
     });
+    var visible = matches.filter(isVisibleInput);
+    return visible.length ? visible : matches;
   }
 
   function waitForShopeeValue(find, label, timeout) {
@@ -594,15 +610,36 @@
     });
   }
 
+  function countDetailsLinksWithin(el) {
+    if (!el || !el.querySelectorAll) return 0;
+    // "รายละเอียด" มักถูกห่อซ้อนกัน เช่น <a><span>รายละเอียด</span></a> — ทั้ง a และ span
+    // จะ match เลือกทั้งคู่ ทำให้นับปุ่มเดียวเป็น 2 ต้องตัด match ที่ซ้อนอยู่ใน match อื่นออก
+    // เหลือแค่ตัวนอกสุดของแต่ละปุ่ม ถึงจะนับ "จำนวนปุ่มจริง" ถูก
+    var matches = Array.from(el.querySelectorAll('button, a, [role="button"], [role="menuitem"], span'))
+      .filter(function (c) { return visibleText(c) === 'รายละเอียด'; });
+    return matches.filter(function (m) {
+      return !matches.some(function (other) { return other !== m && other.contains(m); });
+    }).length;
+  }
+
   function findShopeeShopRow(targetShopHint) {
     var detailsLinks = findAllShopeeControls('รายละเอียด');
+    console.log('[TEST switch] findShopeeShopRow: found', detailsLinks.length, '"รายละเอียด" links, target=', targetShopHint);
     for (var i = 0; i < detailsLinks.length; i++) {
-      for (var row = detailsLinks[i], depth = 0; row && depth < 6; row = row.parentElement, depth++) {
-        if (shopTextMatches(visibleText(row), targetShopHint)) {
-          return detailsLinks[i];
-        }
+      var lastSingleRowAncestor = detailsLinks[i];
+      for (var row = detailsLinks[i], depth = 0; row && depth < 10; row = row.parentElement, depth++) {
+        // หยุดไต่ขึ้นทันทีที่เจอ ancestor ที่มีปุ่ม "รายละเอียด" มากกว่า 1 ตัวข้างใน —
+        // แปลว่าไต่เลยขอบเขตแถวตัวเองไปแล้ว (ไปเจอ container รวมหลายแถว/ทั้งตาราง)
+        if (countDetailsLinksWithin(row) > 1) break;
+        lastSingleRowAncestor = row;
+      }
+      console.log('[TEST switch]   link', i, 'rowText=', JSON.stringify(visibleText(lastSingleRowAncestor)));
+      if (shopTextMatches(visibleText(lastSingleRowAncestor), targetShopHint)) {
+        console.log('[TEST switch]   MATCHED link', i);
+        return detailsLinks[i];
       }
     }
+    console.log('[TEST switch] findShopeeShopRow: NO MATCH found');
     return null;
   }
 
@@ -1215,6 +1252,21 @@
   }, true);
 
   // ────────────────────────────────────────────
+  // DEBUG ONLY — KAN-54 manual click-sequence test (Ctrl+Alt+J)
+  // ชั่วคราว: ไม่ commit/push ตัวนี้ ลบทิ้งก่อน sync กับ main รอบหน้า
+  // บังคับรัน state machine สลับร้านเต็มเชนไปที่ "began" ทันที (ไม่เช็คว่าตรงร้านอยู่แล้วไหม)
+  // เพื่อดูว่าคลิกแต่ละ step บน Shopee จริงถูกไหม
+  // ────────────────────────────────────────────
+  document.addEventListener('keydown', function (e) {
+    if (!(e.ctrlKey && e.altKey && e.code === 'KeyJ')) return;
+    if (currentPlatform() !== 'shopee') return;
+    e.preventDefault();
+    e.stopPropagation();
+    showToast('[TEST] บังคับสลับร้านไป began…', 'warn', true);
+    startShopeeSwitch('TESTORDER1', 'began');
+  }, true);
+
+  // ────────────────────────────────────────────
   // BARCODE SCANNER (in-page USB HID keyboard wedge) — REMOVED (v2.10)
   // เดิมหน้าเว็บดักคีย์จากเครื่องสแกนเองแล้วสั่งพิมพ์ทันที ซึ่งข้ามขั้นตอน
   // นับ/verify ใน desktop app → ตั้งใจเอาออก ให้พิมพ์ได้แค่ผ่าน bridge
@@ -1281,6 +1333,20 @@
         reconnectTimer = setTimeout(connect, 3000);
       }
     }
+
+    // แจ้ง desktop app เมื่อผู้ใช้กด Validate; app จะเช็ค state=done จาก Odoo เอง
+    document.addEventListener('click', function (event) {
+      if (currentPlatform() !== 'odoo') return;
+      if (!event.isTrusted) return;
+      var button = event.target.closest && event.target.closest('button, [role="button"]');
+      var isFormValidate = button && button.matches('button[name="button_validate"]');
+      var isBarcodeValidate = button && /^\/scoped_app\/barcode\//.test(location.pathname)
+        && (button.textContent || '').trim() === 'Validate';
+      if (!isFormValidate && !isBarcodeValidate) return;
+      if (!button || !ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'odoo_validate_clicked' }));
+      console.log('[Auto Print Label] Validate event sent to desktop app');
+    }, true);
 
     connect();
   })();
