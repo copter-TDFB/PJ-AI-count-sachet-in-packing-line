@@ -13,7 +13,6 @@ Layout เมื่อ build เป็น .exe:
 flow: launcher → check GitHub Releases → ถ้ามี version ใหม่ download + replace app/
        → launch app/odoo_counter.exe
 """
-import json
 import shutil
 import ssl
 import subprocess
@@ -21,6 +20,7 @@ import sys
 import threading
 import tkinter as tk
 import traceback
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -91,11 +91,44 @@ def get_local_version() -> str:
     return "0.0.0"
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def fetch_latest_release() -> dict:
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-    req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json'})
-    with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as r:
-        return json.loads(r.read())
+    # api.github.com จำกัด unauthenticated request ไว้ 60 ครั้ง/ชม. ต่อ IP รวมทั้งวงเน็ต —
+    # เครื่อง user ที่แชร์ IP กับเครื่องอื่นในโรงงานโดน 403 rate limit exceeded กันทั้งวง
+    # ใช้ redirect ของหน้าเว็บ releases/latest แทน (คนละ endpoint ไม่โดนโควตาเดียวกัน)
+    url = f"https://github.com/{GITHUB_REPO}/releases/latest"
+    opener = urllib.request.build_opener(_NoRedirect(), urllib.request.HTTPSHandler(context=_SSL_CTX))
+    req = urllib.request.Request(url, method='HEAD')
+    location = ''
+    try:
+        opener.open(req, timeout=10)
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308):
+            location = e.headers.get('Location', '')
+    if not location:
+        raise RuntimeError(f"no release found for {GITHUB_REPO}")
+
+    tag = location.rstrip('/').rsplit('/', 1)[-1]
+    version = tag.lstrip('v')
+    asset_name = f"odoo-counter-{version}{ASSET_SUFFIX}"
+    download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{asset_name}"
+
+    size = 0
+    try:
+        head_req = urllib.request.Request(download_url, method='HEAD')
+        with urllib.request.urlopen(head_req, timeout=10, context=_SSL_CTX) as r:
+            size = int(r.headers.get('Content-Length', 0))
+    except Exception:
+        pass  # progress bar จะไม่ขึ้น % แต่ดาวน์โหลดยังทำงานได้ปกติ
+
+    return {
+        'tag_name': tag,
+        'assets': [{'name': asset_name, 'browser_download_url': download_url, 'size': size}],
+    }
 
 
 class Launcher:
