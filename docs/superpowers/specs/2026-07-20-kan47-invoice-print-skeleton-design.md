@@ -61,22 +61,34 @@ primitive not used anywhere else in this codebase for equivalent behavior to A/B
 
 ### Where
 
-`odoo_counter_app.py`. Changes to `BarcodeWorker` (one field, one signal), one new
-`InvoicePrintWorker` class, and wiring in `MainWindow`.
+`odoo_counter_app.py`. One new signal on `BarcodeWorker`, one new `InvoicePrintWorker` class, and
+wiring in `MainWindow`.
 
 ### `BarcodeWorker` change
 
-Extend the existing `sale.order` read (already fetched for `SHOP_IDENTITY_FIELD`, KAN-52/54 — no
-extra RPC round trip) to also request `x_studio_need_bill`, and add:
+No new field needed on `BarcodeWorker`'s own reads — `x_studio_need_bill` and `invoice_ids` are
+only relevant to invoice work, so `InvoicePrintWorker` fetches them itself in its own dedicated
+`sale.order.read` (see below); duplicating that fetch into `BarcodeWorker`'s existing
+`SHOP_IDENTITY_FIELD` read (KAN-52/54) would just mean fetching the same field twice. The only
+change is one new signal:
 
 ```python
 invoice_job_ready = pyqtSignal(int, str)  # sale_order_id, picking_name
 ```
 
-Fired at the same point `origin_ready` fires — independent of whether 3g-move validation finds
-anything, and independent of `origin` being blank. The need-bill gate check itself stays inside
-`InvoicePrintWorker`, not here; `BarcodeWorker`'s only new responsibility is "read one more field,
-emit one more signal when `sale_id` is present."
+emitted using the `sale_id` already parsed for shop routing:
+
+```python
+if isinstance(sale_id, (list, tuple)) and sale_id and isinstance(sale_id[0], int):
+    self.invoice_job_ready.emit(sale_id[0], picking['name'])
+```
+
+placed as its own unconditional statement — **not** nested inside the existing `if origin:` block
+that guards `origin_ready.emit(...)`. This is the one point worth being explicit about: the ticket
+requires the invoice trigger to fire independent of `origin` being blank, and it would be an easy
+mistake to piggyback the emit inside that `if origin:` check since both fire from the same spot in
+`run()`. The gate check (`x_studio_need_bill`) and 3g-move validation both stay entirely out of
+this path — `BarcodeWorker`'s only new responsibility is "if a sale order exists, say so."
 
 ### `MainWindow` queue wiring (Approach A)
 
@@ -210,7 +222,7 @@ No settings-dialog UI exists for these yet (T4). For T1, the operator sets
 |---|---|
 | Need-bill flag not set | stdout log line only, no status message (AC2) |
 | Printer not configured | warning status + stdout log, skip entirely — checked first, before any Odoo call |
-| `sale_id` missing / sale order not found | stdout log, no status message (nothing to report to the operator) |
+| Sale order record not found (e.g. deleted between scan and job running) | stdout log, no status message — `sale_id` itself is never missing here since `invoice_job_ready` only fires when one exists |
 | No `invoice_ids` on sale order | warning status + stdout log |
 | No posted `out_invoice` found | warning status + stdout log |
 | PDF download failure (session auth, report fetch, non-PDF response) | warning status + stdout log |
