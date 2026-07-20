@@ -167,10 +167,11 @@ def _download_invoice_pdf(models, uid, invoice_id: int, invoice_name: str, repor
 
 # ── Worker: ค้นหา picking จาก barcode ───────────────────────
 class BarcodeWorker(QThread):
-    data_ready     = pyqtSignal(dict)
-    not_found      = pyqtSignal(str)
-    error_occurred = pyqtSignal(str)
-    origin_ready   = pyqtSignal(str, object)  # fire ทันทีที่เจอ picking ใน Odoo (มี/ไม่มีสินค้า 3g ก็ส่ง)
+    data_ready         = pyqtSignal(dict)
+    not_found          = pyqtSignal(str)
+    error_occurred     = pyqtSignal(str)
+    origin_ready       = pyqtSignal(str, object)  # fire ทันทีที่เจอ picking ใน Odoo (มี/ไม่มีสินค้า 3g ก็ส่ง)
+    invoice_job_ready  = pyqtSignal(int, str)     # sale_order_id, picking_name — independent of origin/3g-move outcome
 
     def __init__(self, barcode: str):
         super().__init__()
@@ -196,8 +197,8 @@ class BarcodeWorker(QThread):
             picking = pickings[0]
             origin = (picking.get('origin') or '').strip() if isinstance(picking.get('origin'), str) else ''
             shop = None
+            sale_id = picking.get('sale_id')
             try:
-                sale_id = picking.get('sale_id')
                 if isinstance(sale_id, (list, tuple)) and sale_id and isinstance(sale_id[0], int):
                     sale = models.execute_kw(
                         ODOO_DB, uid, ODOO_PASSWORD,
@@ -216,6 +217,10 @@ class BarcodeWorker(QThread):
                 pass
             if origin:
                 self.origin_ready.emit(origin, shop)
+            # Invoice trigger (KAN-47): independent of origin being blank and of the
+            # 3g-move check below — fires whenever the picking has a sale order at all.
+            if isinstance(sale_id, (list, tuple)) and sale_id and isinstance(sale_id[0], int):
+                self.invoice_job_ready.emit(sale_id[0], picking['name'])
 
             moves = models.execute_kw(
                 ODOO_DB, uid, ODOO_PASSWORD,
