@@ -1723,6 +1723,8 @@ class MainWindow(QMainWindow):
         self._counter_panel.closed.connect(self._on_counter_closed)
         self._camera_worker = None
         self._workers: set  = set()
+        self._invoice_queue: deque = deque()
+        self._invoice_worker: InvoicePrintWorker | None = None
 
         self._barcode_listener = GlobalBarcodeListener()
         self._barcode_listener.barcode_ready.connect(self._on_barcode_scanned)
@@ -1888,9 +1890,33 @@ class MainWindow(QMainWindow):
         w.not_found.connect(self._on_not_found)
         w.error_occurred.connect(self._on_error)
         w.origin_ready.connect(self._bridge.broadcast)
+        w.invoice_job_ready.connect(self._on_invoice_job_ready)
         w.finished.connect(lambda: self._workers.discard(w))
         self._workers.add(w)
         w.start()
+
+    def _on_invoice_job_ready(self, sale_order_id: int, picking_name: str):
+        self._invoice_queue.append((sale_order_id, picking_name))
+        self._pump_invoice_queue()
+
+    def _pump_invoice_queue(self):
+        if self._invoice_worker is not None or not self._invoice_queue:
+            return
+        sale_order_id, picking_name = self._invoice_queue.popleft()
+        w = InvoicePrintWorker(sale_order_id, picking_name)
+        w.print_status.connect(self._on_invoice_print_status)
+        w.finished.connect(self._on_invoice_worker_finished)
+        self._invoice_worker = w
+        w.start()
+
+    def _on_invoice_worker_finished(self):
+        self._invoice_worker = None
+        self._pump_invoice_queue()
+
+    def _on_invoice_print_status(self, level: str, message: str):
+        color = {'ok': '#4CAF50', 'checking': '#888', 'warn': '#EF9A9A'}.get(level, '#888')
+        self.lbl_status.setStyleSheet(f"color:{color}; font-size:12px;")
+        self.lbl_status.setText(message)
 
     def _on_counter_closed(self):
         if self._camera_worker:
