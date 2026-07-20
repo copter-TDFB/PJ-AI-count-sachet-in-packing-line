@@ -380,6 +380,24 @@ Signal:
 - success emit `save_done` (ปัจจุบัน `CounterPanel` ไม่ subscribe เพราะ toast แสดงไปแล้วก่อน save)
 - error emit `save_error` — `CounterPanel` log ลง stdout เฉย ๆ ไม่ขึ้น toast (เพราะ UI ถูก hide ไปแล้ว)
 
+### `InvoicePrintWorker` (KAN-47, invoice auto-print)
+
+Trigger มาจาก `BarcodeWorker.invoice_job_ready(sale_order_id, picking_name)` — emit ทันทีที่ picking มี `sale_id`, ไม่ขึ้นกับว่า `origin` ว่างหรือไม่พบสินค้า 3g ก็ตาม (คนละจุดกับ `origin_ready`). `MainWindow` เก็บ job ไว้ใน `deque` (`_invoice_queue`) แล้ว spawn `InvoicePrintWorker` ทีละตัวเท่านั้น — worker ตัวใหม่จะเริ่มก็ต่อเมื่อตัวก่อนหน้า `finished` แล้ว (ไม่มี background thread ค้างตลอดอายุโปรแกรม; ดู `_pump_invoice_queue`).
+
+Logic ใน `run()`:
+
+1. เช็ก `invoice_printer_name` จาก `_load_invoice_config()` — ถ้าไม่ตั้งค่าไว้ emit warning แล้ว skip ทันที (ไม่มี default-printer fallback)
+2. อ่าน `sale.order` เอาฟิลด์ `x_studio_need_bill` (unwrap many2one shape) + `invoice_ids` — ถ้าค่าไม่ตรงกับ `invoice_need_bill_value` (default `"ปริ้นใบเสร็จ"`) log เฉย ๆ ไม่มี toast แล้ว return
+3. resolve invoice ที่ post แล้วผ่าน `invoice_ids → account.move (move_type=out_invoice, state=posted)` เท่านั้น — **ไม่มี text-search ข้าม field, ไม่ auto-create invoice** (auto-create เป็นของ `test_odoo_counter_app.py`/KAN-71 เฉพาะ test tenant เท่านั้น ดู [[docs/adr/0003-auto-created-invoices-posted-immediately.md]])
+4. ดาวน์โหลด PDF ผ่าน `_download_invoice_pdf()` (web-session login + `/report/pdf/<report_name>/<invoice_id>`, พอร์ตมาจาก `test_odoo_counter_app.py`)
+5. พิมพ์เงียบผ่าน `subprocess.run([sumatra_path, '-print-to', printer, '-silent', pdf_path])`
+
+Signal: `print_status(level, message)` โดย `level` เป็น `'ok'|'checking'|'warn'` — `MainWindow._on_invoice_print_status` เอาไปแสดงใน `lbl_status` เดียวกับ barcode/camera/Odoo status (สีเขียว/เทา/แดงอ่อน)
+
+Config keys ใหม่ใน `crop_config.json` (อ่านผ่าน `_load_invoice_config()`): `invoice_printer_name` (default `""` — ตั้งใจไม่มี fallback), `invoice_report_id` (default `1204`, ต้องยืนยันกับ production ก่อนใช้จริง), `invoice_sumatra_path`, `invoice_need_bill_field`, `invoice_need_bill_value`. ยังไม่มี settings UI (T4/KAN-50) — ตั้งค่า printer ด้วยการแก้ไฟล์ JSON เองไปก่อน.
+
+Scope: นี่คือ walking skeleton (T1/KAN-47) เท่านั้น — SumatraPDF ยังรันจาก local install (bundling เป็น T2/KAN-48), config ยังอยู่ใน `crop_config.json` เดิม (ย้ายไป `%LOCALAPPDATA%` เป็น T3/KAN-49), ยังไม่มี idempotency/dedupe กันสแกนซ้ำ (T5/KAN-51).
+
 ### `OdooStatusWorker`
 
 หน้าที่:
@@ -1231,8 +1249,9 @@ Commit history:
 `odoo_counter_app.py`
 
 - `OdooConn` - XML-RPC connection cache
-- `BarcodeWorker` - search picking/moves + lot/exp lookup
+- `BarcodeWorker` - search picking/moves + lot/exp lookup + emits `invoice_job_ready`
 - `OdooSaveWorker` - post Odoo note (fire-and-forget จาก hideEvent)
+- `InvoicePrintWorker` - gate + resolve posted invoice + download PDF + silent SumatraPDF print (KAN-47)
 - `_PingTransport` - XML-RPC timeout transport
 - `OdooStatusWorker` - periodic Odoo ping + `check_now()` event-based wakeup
 - `BarcodeBridgeWorker` - WebSocket server (port 9999) broadcast barcode ไป Tampermonkey ใน browser
