@@ -5,9 +5,12 @@ import time
 import asyncio
 import threading
 import queue
+import subprocess
 import itertools
+from collections import deque
 _snd_counter = itertools.count()
 import xmlrpc.client
+import requests
 import cv2
 import numpy as np
 import websockets
@@ -117,6 +120,49 @@ class OdooConn:
     def reset(cls):
         cls._uid    = None
         cls._models = None
+
+
+def _download_invoice_pdf(models, uid, invoice_id: int, invoice_name: str, report_id: int) -> Path | None:
+    """Web-session login + /report/pdf download. None on any failure. Ported from
+    test_odoo_counter_app.py (KAN-70/71 prototype); report_id is config-driven here
+    instead of a hardcoded module constant (KAN-47)."""
+    try:
+        with requests.Session() as session:
+            resp = session.post(
+                f"{ODOO_URL}/web/session/authenticate",
+                json={
+                    'jsonrpc': '2.0', 'method': 'call',
+                    'params': {'db': ODOO_DB, 'login': ODOO_USER, 'password': ODOO_PASSWORD},
+                },
+                timeout=30,
+            )
+            result = resp.json().get('result')
+            if not result or not result.get('uid'):
+                return None
+
+            reports = models.execute_kw(
+                ODOO_DB, uid, ODOO_PASSWORD,
+                'ir.actions.report', 'read',
+                [[report_id]],
+                {'fields': ['report_name']}
+            )
+            if not reports:
+                return None
+            report_name = reports[0]['report_name']
+
+            r = session.get(f"{ODOO_URL}/report/pdf/{report_name}/{invoice_id}", timeout=60)
+            if r.status_code != 200 or 'pdf' not in r.headers.get('Content-Type', '').lower():
+                return None
+
+            out_dir = _get_base_dir() / 'invoices'
+            out_dir.mkdir(exist_ok=True)
+            safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in invoice_name)
+            path = out_dir / f"{safe_name}.pdf"
+            path.write_bytes(r.content)
+            return path
+    except Exception as e:
+        print(f"[Invoice] ดาวน์โหลดไม่สำเร็จ: {e}", flush=True)
+        return None
 
 
 # ── Worker: ค้นหา picking จาก barcode ───────────────────────
