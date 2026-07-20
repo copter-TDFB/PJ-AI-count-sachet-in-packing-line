@@ -63,17 +63,20 @@ def _load_config_dict() -> dict:
             return {}
         try:
             legacy_dict = json.loads(legacy_path.read_text(encoding='utf-8'))
-        except Exception:
+        except Exception as e:
+            print(f"[Config] ไม่สามารถอ่าน legacy config {legacy_path}: {e}", flush=True)
             return {}
         try:
             new_path.parent.mkdir(parents=True, exist_ok=True)
             new_path.write_text(json.dumps(legacy_dict, indent=2), encoding='utf-8')
-        except Exception:
-            pass  # best-effort; still return the migrated values for this call
+        except Exception as e:
+            # best-effort; still return the migrated values for this call
+            print(f"[Config] migrate เขียน {new_path} ไม่สำเร็จ: {e}", flush=True)
         return legacy_dict
     try:
         return json.loads(new_path.read_text(encoding='utf-8'))
-    except Exception:
+    except Exception as e:
+        print(f"[Config] อ่าน {new_path} ไม่สำเร็จ (จะใช้ค่า default): {e}", flush=True)
         return {}
 
 def _load_crop() -> tuple:
