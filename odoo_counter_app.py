@@ -1,4 +1,5 @@
 import sys
+import os
 import ctypes
 import json
 import time
@@ -37,17 +38,41 @@ DEFAULT_MODEL = str(_get_base_dir() / 'ai_3g_v12.pt')
 
 
 # ── Settings config (per-machine: crop rect + conf threshold) ─
+# Legacy (pre-KAN-49) location, inside the app's own base dir. The launcher's auto-update
+# wipes and recreates that whole directory (see launcher.py _install()), which used to wipe
+# this file too. Kept as-is; it is now only the one-time migration source below.
 def _crop_config_path() -> Path:
     return _get_base_dir() / 'crop_config.json'
+
+# Current location: outside the app folder entirely, so app-folder replacement on
+# auto-update never touches it.
+def _config_path() -> Path:
+    local_appdata = os.environ.get('LOCALAPPDATA') or str(Path.home() / 'AppData' / 'Local')
+    return Path(local_appdata) / 'odoo-counter' / 'config.json'
 
 DEFAULT_CONF = 0.7
 
 def _load_config_dict() -> dict:
-    p = _crop_config_path()
-    if not p.exists():
-        return {}
+    new_path = _config_path()
+    if not new_path.exists():
+        # One-time migration from the legacy location. Once config.json exists at the new
+        # location it is the sole source of truth; legacy edits after this point are never
+        # re-migrated.
+        legacy_path = _crop_config_path()
+        if not legacy_path.exists():
+            return {}
+        try:
+            legacy_dict = json.loads(legacy_path.read_text(encoding='utf-8'))
+        except Exception:
+            return {}
+        try:
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            new_path.write_text(json.dumps(legacy_dict, indent=2), encoding='utf-8')
+        except Exception:
+            pass  # best-effort; still return the migrated values for this call
+        return legacy_dict
     try:
-        return json.loads(p.read_text(encoding='utf-8'))
+        return json.loads(new_path.read_text(encoding='utf-8'))
     except Exception:
         return {}
 
@@ -71,10 +96,11 @@ def _load_conf() -> float:
 
 def _save_settings(rect: tuple, conf: float):
     x, y, w, h = rect
-    _crop_config_path().write_text(
-        json.dumps({'x': x, 'y': y, 'w': w, 'h': h, 'conf': conf}, indent=2),
-        encoding='utf-8'
-    )
+    config_path = _config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    d = _load_config_dict()
+    d.update({'x': x, 'y': y, 'w': w, 'h': h, 'conf': conf})
+    config_path.write_text(json.dumps(d, indent=2), encoding='utf-8')
 
 
 # ── Connection cache ──────────────────────────────────────────
