@@ -56,7 +56,7 @@ Flow ใช้งานจริง:
 - `ai_3g_v4`, `v5`, `v7`, `v9`, `v10`, `v11` `_openvino_model/` - export ของโมเดลรุ่นเก่า (เก็บไว้เผื่อเทียบ)
 - `ถูก.mp3` - เสียงเมื่อ count ตรง
 - `ผิด.mp3` - เสียงเมื่อ count ผิด
-- `crop_config.json` - per-machine config ของ crop rect และ confidence (gitignored)
+- `crop_config.json` - **legacy** location ของ per-machine config (gitignored); ตั้งแต่ KAN-49 ใช้เป็น one-time migration source เท่านั้น ค่าจริงตอนนี้อยู่ที่ `%LOCALAPPDATA%\odoo-counter\config.json` (นอก repo/นอก `app/` ไปเลย) — ดูหัวข้อ "Config Logic: Crop And Confidence"
 - `snapshots/` - โฟลเดอร์ที่ app สร้างอัตโนมัติเมื่อนับครบ; เก็บภาพ raw จากกล้องตอน trigger save พร้อม timestamp + picking name
 
 Generated/build outputs:
@@ -236,11 +236,31 @@ Base path logic:
 
 ## Config Logic: Crop And Confidence
 
-ไฟล์ config:
+ไฟล์ config (ตั้งแต่ KAN-49):
 
 ```text
-crop_config.json
+%LOCALAPPDATA%\odoo-counter\config.json
 ```
+
+อยู่นอกโฟลเดอร์ `app/` โดยตั้งใจ — launcher auto-update ทำ `shutil.rmtree(APP_DIR)` แล้วสร้าง
+`app/` ใหม่ทุกครั้งที่มี release ใหม่ (`launcher.py` `_install()`) ก่อน KAN-49 ไฟล์ config
+(`crop_config.json`) อยู่ใน `app/` เดียวกัน เลยถูกลบทิ้งทุกครั้งที่ auto-update; ย้ายออกมาไว้ที่
+`%LOCALAPPDATA%` แก้ปัญหานี้เพราะ path นี้ไม่เกี่ยวกับ `app/` เลย
+
+Legacy location (pre-KAN-49): `crop_config.json` ใน `_get_base_dir()` เดิม (โฟลเดอร์ของ exe
+ตอน frozen หรือโฟลเดอร์ script ตอน run จาก source) — ฟังก์ชัน `_crop_config_path()` ยังอยู่ใน
+โค้ดแต่ใช้เป็น migration source เท่านั้น ไม่ถูกอ่าน/เขียนต่อหลัง migrate ครั้งแรกแล้ว
+
+Migration (one-time, เกิดใน `_load_config_dict()`):
+
+1. ถ้ายังไม่มีไฟล์ที่ location ใหม่ (`%LOCALAPPDATA%\odoo-counter\config.json`) แต่มี legacy
+   `crop_config.json` อยู่ → copy ค่าจาก legacy ไปเขียนที่ location ใหม่ (สร้างโฟลเดอร์
+   `odoo-counter` ให้ถ้ายังไม่มี)
+2. เมื่อไฟล์ location ใหม่ถูกสร้างแล้ว (จาก migration หรือจาก save ปกติ) มันเป็น source of
+   truth เพียงที่เดียว — ถ้า user แก้ legacy `crop_config.json` อีกหลังจากนั้น การแก้นั้น
+   **จะไม่ถูก re-migrate**
+3. ถ้าไม่มีไฟล์ที่ location ไหนเลย จะได้ `{}` และทุก caller ใช้ default ตามปกติ (พฤติกรรม
+   เดิมเหมือนก่อน KAN-49 ทุกอย่าง)
 
 schema:
 
@@ -258,10 +278,13 @@ schema:
 
 - `x`, `y`, `w`, `h` เป็น normalized ratio 0..1 ของภาพหลัง camera preprocess
 - `conf` เป็น confidence threshold สำหรับ YOLO
+- ไฟล์นี้อาจมี key อื่นที่ไม่เกี่ยวกับ crop/conf ปนอยู่ด้วย (เช่น `invoice_*` ของ KAN-47) —
+  `_save_settings()` เป็น merge-based save (อ่าน dict เดิมทั้งหมดผ่าน `_load_config_dict()`,
+  update เฉพาะ 5 key นี้ (`x`/`y`/`w`/`h`/`conf`), แล้วเขียนกลับทั้ง dict) จึงไม่ทำ key อื่นหาย
 
 Precedence:
 
-1. ถ้ามี `crop_config.json` และอ่านได้ จะใช้ค่าจากไฟล์
+1. ถ้ามี config ที่ location ใหม่ (หลัง migration ถ้ามี) และอ่านได้ จะใช้ค่าจากไฟล์
 2. ถ้าไม่มีไฟล์หรือ parse fail จะใช้ default จาก source
 3. default conf ปัจจุบันคือ `0.7`
 
@@ -273,8 +296,11 @@ Clamp:
 
 สำคัญ:
 
-- ถ้า user เคยกด save setting แล้ว `crop_config.json` มี `conf` อยู่ ค่าในไฟล์จะ override `DEFAULT_CONF`
-- ถ้าต้องการให้เครื่องที่เคยตั้งค่าแล้วกลับมา 0.7 ต้องแก้ไฟล์ `crop_config.json` หรือเปิดหน้า setting แล้วเลื่อนเป็น 0.70 และกด save
+- ถ้า user เคยกด save setting แล้ว config มี `conf` อยู่ ค่าในไฟล์จะ override `DEFAULT_CONF`
+- ถ้าต้องการให้เครื่องที่เคยตั้งค่าแล้วกลับมา 0.7 ต้องแก้ไฟล์
+  `%LOCALAPPDATA%\odoo-counter\config.json` หรือเปิดหน้า setting แล้วเลื่อนเป็น 0.70 และกด save
+- ไฟล์นี้อยู่นอก `app/` แล้ว ดังนั้น auto-update (ที่ลบ/สร้าง `app/` ใหม่ทั้งโฟลเดอร์) จะไม่ทำให้
+  ค่านี้หายอีกต่อไป — นี่คือประเด็นหลักที่ KAN-49 แก้
 
 ## Odoo Logic
 
@@ -678,7 +704,8 @@ Flow:
 6. ถ้ากด save:
    - `CameraWorker.set_crop_rect(new_rect)`
    - `CameraWorker.set_conf(new_conf)`
-   - `_save_settings(new_rect, new_conf)` ลง `crop_config.json`
+   - `_save_settings(new_rect, new_conf)` ลง `%LOCALAPPDATA%\odoo-counter\config.json`
+     (merge-based, ไม่ทับ key อื่นที่มีอยู่แล้ว)
 7. disconnect preview signal และ set `_emit_raw = False`
 
 `CropPreviewWidget`:
@@ -1193,7 +1220,10 @@ Commit history:
 
 หมายเหตุ:
 
-- ถึง `.gitignore` ignore `crop_config.json` แต่ไฟล์อาจมีอยู่ local และมีผลกับ default conf/crop
+- ถึง `.gitignore` ignore `crop_config.json` แต่ไฟล์นี้เป็น**legacy** location แล้ว (ตั้งแต่
+  KAN-49) ใช้เป็น one-time migration source เท่านั้น — ค่า config จริงตอนนี้อยู่ที่
+  `%LOCALAPPDATA%\odoo-counter\config.json` ซึ่งอยู่นอก repo อยู่แล้วโดยธรรมชาติ (ไม่ต้อง
+  ignore เพิ่ม)
 - ถึง ignore `*_openvino_model/` แต่ build ต้องใช้ folder นี้ถ้าต้องการ bundle OpenVINO pre-exported
 - โฟลเดอร์ `snapshots/` **ไม่ได้** ถูก ignore — ถ้ารัน source mode ในโปรเจกต์ root โฟลเดอร์นี้จะถูกสร้างขึ้นและอาจหลุดเข้า git ตอน add ทั้งหมด
 
