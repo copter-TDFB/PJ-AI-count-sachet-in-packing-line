@@ -77,6 +77,27 @@ def _save_settings(rect: tuple, conf: float):
     )
 
 
+def _load_invoice_config() -> dict:
+    """Invoice auto-print settings (KAN-47), read from the same crop_config.json.
+    No printer-picker UI exists yet (T4) — printer_name is set by hand-editing the file."""
+    d = _load_config_dict()
+    printer_name    = d.get('invoice_printer_name')
+    report_id       = d.get('invoice_report_id')
+    sumatra_path    = d.get('invoice_sumatra_path')
+    need_bill_field = d.get('invoice_need_bill_field')
+    need_bill_value = d.get('invoice_need_bill_value')
+    return {
+        'printer_name':    printer_name if isinstance(printer_name, str) else '',
+        'report_id':       report_id if isinstance(report_id, int) else 1204,
+        'sumatra_path':    sumatra_path if isinstance(sumatra_path, str) and sumatra_path
+                           else r'C:\Program Files\SumatraPDF\SumatraPDF.exe',
+        'need_bill_field': need_bill_field if isinstance(need_bill_field, str) and need_bill_field
+                           else 'x_studio_need_bill',
+        'need_bill_value': need_bill_value if isinstance(need_bill_value, str) and need_bill_value
+                           else 'ปริ้นใบเสร็จ',
+    }
+
+
 # ── Connection cache ──────────────────────────────────────────
 class OdooConn:
     _uid    = None
