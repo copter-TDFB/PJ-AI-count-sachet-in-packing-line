@@ -316,6 +316,78 @@ class BarcodeWorker(QThread):
             self.error_occurred.emit(str(e))
 
 
+# ── Worker: พิมพ์ใบกำกับภาษีอัตโนมัติ (invoice auto-print, KAN-47) ──
+class InvoicePrintWorker(QThread):
+    print_status = pyqtSignal(str, str)  # ('ok'|'checking'|'warn'), message
+
+    def __init__(self, sale_order_id: int, picking_name: str):
+        super().__init__()
+        self.sale_order_id = sale_order_id
+        self.picking_name  = picking_name
+
+    def run(self):
+        try:
+            cfg = _load_invoice_config()
+            printer = cfg['printer_name']
+            if not printer:
+                self.print_status.emit('warn', 'ยังไม่ได้ตั้งค่าเครื่องพิมพ์ใบเสร็จ')
+                print(f"[Invoice] {self.picking_name}: printer not configured, skip", flush=True)
+                return
+
+            OdooConn.ensure()
+            uid, models = OdooConn._uid, OdooConn._models
+
+            orders = models.execute_kw(
+                ODOO_DB, uid, ODOO_PASSWORD,
+                'sale.order', 'read',
+                [[self.sale_order_id]],
+                {'fields': [cfg['need_bill_field'], 'invoice_ids']}
+            )
+            if not orders:
+                print(f"[Invoice] {self.picking_name}: sale order not found, skip", flush=True)
+                return
+
+            need_bill_field = orders[0].get(cfg['need_bill_field'])
+            need_bill = need_bill_field[1] if isinstance(need_bill_field, (list, tuple)) else (need_bill_field or '')
+            if (need_bill or '').strip() != cfg['need_bill_value']:
+                print(f"[Invoice] {self.picking_name}: need-bill flag not set, skip", flush=True)
+                return
+
+            invoice_ids = orders[0].get('invoice_ids') or []
+            if not invoice_ids:
+                self.print_status.emit('warn', f'{self.picking_name}: ยังไม่มีใบกำกับภาษี')
+                return
+
+            invoices = models.execute_kw(
+                ODOO_DB, uid, ODOO_PASSWORD,
+                'account.move', 'search_read',
+                [[['id', 'in', invoice_ids], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']]],
+                {'fields': ['name'], 'limit': 1, 'order': 'id desc'}
+            )
+            if not invoices:
+                self.print_status.emit('warn', f'{self.picking_name}: ไม่มีใบกำกับภาษีที่ post แล้ว')
+                return
+            invoice_name = invoices[0]['name']
+
+            self.print_status.emit('checking', f'กำลังดึงใบเสร็จ {invoice_name}...')
+            path = _download_invoice_pdf(models, uid, invoices[0]['id'], invoice_name, cfg['report_id'])
+            if not path:
+                self.print_status.emit('warn', f'ดึงใบเสร็จ {invoice_name} ไม่สำเร็จ')
+                return
+
+            subprocess.run(
+                [cfg['sumatra_path'], '-print-to', printer, '-silent', str(path)],
+                check=True, timeout=30
+            )
+            self.print_status.emit('ok', f'พิมพ์ใบเสร็จ {invoice_name} แล้ว')
+            print(f"[Invoice] {self.picking_name}: printed {invoice_name}", flush=True)
+
+        except Exception as e:
+            OdooConn.reset()
+            self.print_status.emit('warn', f'{self.picking_name}: {e}')
+            print(f"[Invoice] {self.picking_name}: error — {e}", flush=True)
+
+
 # ── Worker: บันทึก log note กลับ Odoo ───────────────────────
 class OdooSaveWorker(QThread):
     save_done  = pyqtSignal()
