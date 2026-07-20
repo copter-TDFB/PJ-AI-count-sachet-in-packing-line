@@ -12,6 +12,7 @@ app_backup/
 crop_config.json
 *.pt
 snapshots/
+invoices/
 สูตร upload เข้า githup.txt
 
 # Office lock files / build previews / scratch (2026-07-02)

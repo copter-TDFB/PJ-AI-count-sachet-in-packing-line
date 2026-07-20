@@ -109,12 +109,18 @@ class OdooConn:
     @classmethod
     def ensure(cls):
         if cls._uid is None:
-            common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
+            common = xmlrpc.client.ServerProxy(
+                f"{ODOO_URL}/xmlrpc/2/common",
+                transport=_PingTransport(timeout=10.0),
+            )
             uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_PASSWORD, {})
             if not uid:
                 raise RuntimeError("Login ไม่ผ่าน")
             cls._uid    = uid
-            cls._models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
+            cls._models = xmlrpc.client.ServerProxy(
+                f"{ODOO_URL}/xmlrpc/2/object",
+                transport=_PingTransport(timeout=10.0),
+            )
 
     @classmethod
     def reset(cls):
@@ -147,6 +153,8 @@ def _download_invoice_pdf(models, uid, invoice_id: int, invoice_name: str, repor
                 {'fields': ['report_name']}
             )
             if not reports:
+                return None
+            if reports[0].get('model') != 'account.move':
                 return None
             report_name = reports[0]['report_name']
 
