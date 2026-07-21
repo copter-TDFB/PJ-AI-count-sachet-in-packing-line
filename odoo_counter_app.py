@@ -22,7 +22,7 @@ from pynput import keyboard as pynput_kb
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QGroupBox, QLineEdit, QFileDialog, QFrame,
-    QScrollArea, QDialog, QSlider, QComboBox
+    QScrollArea, QDialog, QSlider, QComboBox, QCheckBox
 )
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
@@ -132,25 +132,37 @@ def _default_sumatra_path() -> str:
     return r'C:\Program Files\SumatraPDF\SumatraPDF.exe'
 
 
+def _save_invoice_auto_print(enabled: bool):
+    """Sibling of _save_invoice_printer() for the invoice auto-print toggle (KAN-125) —
+    loads full dict, updates invoice_auto_print_enabled, writes back."""
+    config_path = _config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    d = _load_config_dict()
+    d.update({'invoice_auto_print_enabled': enabled})
+    config_path.write_text(json.dumps(d, indent=2), encoding='utf-8')
+
+
 def _load_invoice_config() -> dict:
     """Invoice auto-print settings (KAN-47), read from the same crop_config.json.
     Printer-picker UI lives in CropSettingsDialog (KAN-50) — printer_name is set there and
     persisted via _save_invoice_printer(), no more hand-editing the JSON file."""
     d = _load_config_dict()
-    printer_name    = d.get('invoice_printer_name')
-    report_id       = d.get('invoice_report_id')
-    sumatra_path    = d.get('invoice_sumatra_path')
-    need_bill_field = d.get('invoice_need_bill_field')
-    need_bill_value = d.get('invoice_need_bill_value')
+    printer_name       = d.get('invoice_printer_name')
+    auto_print_enabled = d.get('invoice_auto_print_enabled')
+    report_id          = d.get('invoice_report_id')
+    sumatra_path       = d.get('invoice_sumatra_path')
+    need_bill_field    = d.get('invoice_need_bill_field')
+    need_bill_value    = d.get('invoice_need_bill_value')
     return {
-        'printer_name':    printer_name if isinstance(printer_name, str) else '',
-        'report_id':       report_id if isinstance(report_id, int) else 1204,
-        'sumatra_path':    sumatra_path if isinstance(sumatra_path, str) and sumatra_path
-                           else _default_sumatra_path(),
-        'need_bill_field': need_bill_field if isinstance(need_bill_field, str) and need_bill_field
-                           else 'x_studio_need_bill',
-        'need_bill_value': need_bill_value if isinstance(need_bill_value, str) and need_bill_value
-                           else 'ปริ้นใบเสร็จ',
+        'printer_name':       printer_name if isinstance(printer_name, str) else '',
+        'auto_print_enabled': auto_print_enabled if isinstance(auto_print_enabled, bool) else True,
+        'report_id':          report_id if isinstance(report_id, int) else 1204,
+        'sumatra_path':       sumatra_path if isinstance(sumatra_path, str) and sumatra_path
+                               else _default_sumatra_path(),
+        'need_bill_field':    need_bill_field if isinstance(need_bill_field, str) and need_bill_field
+                               else 'x_studio_need_bill',
+        'need_bill_value':    need_bill_value if isinstance(need_bill_value, str) and need_bill_value
+                               else 'ปริ้นใบเสร็จ',
     }
 
 
@@ -1044,7 +1056,7 @@ class CropPreviewWidget(QWidget):
 
 
 class CropSettingsDialog(QDialog):
-    def __init__(self, current_rect: tuple, current_conf: float, current_printer: str = '', parent=None):
+    def __init__(self, current_rect: tuple, current_conf: float, current_printer: str = '', current_auto_print: bool = True, parent=None):
         super().__init__(parent)
         self.setWindowTitle("ตั้งค่ากล้อง / Detection")
         self.resize(960, 720)
@@ -1112,6 +1124,11 @@ class CropSettingsDialog(QDialog):
         pv = QVBoxLayout(printer_box)
         pv.setContentsMargins(12, 10, 12, 10)
         pv.setSpacing(6)
+
+        self.chk_auto_print = QCheckBox("เปิดใช้งานพิมพ์ใบเสร็จอัตโนมัติ")
+        self.chk_auto_print.setChecked(current_auto_print)
+        self.chk_auto_print.setStyleSheet("color:#eee; font-size:13px;")
+        pv.addWidget(self.chk_auto_print)
 
         pl = QHBoxLayout()
         pl.setSpacing(10)
@@ -1210,6 +1227,9 @@ class CropSettingsDialog(QDialog):
 
     def get_printer(self) -> str:
         return self.printer_combo.currentData() or ''
+
+    def get_auto_print_enabled(self) -> bool:
+        return self.chk_auto_print.isChecked()
 
     def _on_test_print(self):
         printer = self.get_printer()
@@ -2001,8 +2021,10 @@ class MainWindow(QMainWindow):
             return
         cur_rect = self._camera_worker._crop_rect
         cur_conf = self._camera_worker.conf
-        cur_printer = _load_invoice_config()['printer_name']
-        dlg = CropSettingsDialog(cur_rect, cur_conf, cur_printer, parent=self)
+        inv_cfg = _load_invoice_config()
+        cur_printer = inv_cfg['printer_name']
+        cur_auto_print = inv_cfg['auto_print_enabled']
+        dlg = CropSettingsDialog(cur_rect, cur_conf, cur_printer, cur_auto_print, parent=self)
         self._camera_worker.set_emit_raw(True)
         self._camera_worker.raw_frame_ready.connect(dlg.update_frame)
         try:
@@ -2010,11 +2032,13 @@ class MainWindow(QMainWindow):
                 new_rect = dlg.get_rect()
                 new_conf = dlg.get_conf()
                 new_printer = dlg.get_printer()
+                new_auto_print = dlg.get_auto_print_enabled()
                 self._camera_worker.set_crop_rect(new_rect)
                 self._camera_worker.set_conf(new_conf)
                 try:
                     _save_settings(new_rect, new_conf)
                     _save_invoice_printer(new_printer)
+                    _save_invoice_auto_print(new_auto_print)
                     self.lbl_status.setText(
                         f"บันทึก: crop {new_rect[2]*100:.0f}%×{new_rect[3]*100:.0f}%, conf {new_conf:.2f}"
                     )
@@ -2096,6 +2120,8 @@ class MainWindow(QMainWindow):
         w.start()
 
     def _on_invoice_job_ready(self, sale_order_id: int, picking_name: str):
+        if not _load_invoice_config()['auto_print_enabled']:
+            return
         self._invoice_queue.append((sale_order_id, picking_name))
         self._pump_invoice_queue()
 
