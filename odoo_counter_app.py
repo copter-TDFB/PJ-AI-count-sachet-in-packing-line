@@ -193,7 +193,7 @@ def _download_invoice_pdf(models, uid, invoice_id: int, invoice_name: str, repor
                 ODOO_DB, uid, ODOO_PASSWORD,
                 'ir.actions.report', 'read',
                 [[report_id]],
-                {'fields': ['report_name']}
+                {'fields': ['report_name', 'model']}
             )
             if not reports:
                 return None
