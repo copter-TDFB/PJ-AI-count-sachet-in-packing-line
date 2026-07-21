@@ -413,14 +413,15 @@ Trigger มาจาก `BarcodeWorker.invoice_job_ready(sale_order_id, picking_
 Logic ใน `run()`:
 
 1. เช็ก `invoice_printer_name` จาก `_load_invoice_config()` — ถ้าไม่ตั้งค่าไว้ emit warning แล้ว skip ทันที (ไม่มี default-printer fallback)
-2. อ่าน `sale.order` เอาฟิลด์ `x_studio_need_bill` (unwrap many2one shape) + `invoice_ids` — ถ้าค่าไม่ตรงกับ `invoice_need_bill_value` (default `"ปริ้นใบเสร็จ"`) log เฉย ๆ ไม่มี toast แล้ว return
-3. resolve invoice ที่ post แล้วผ่าน `invoice_ids → account.move (move_type=out_invoice, state=posted)` เท่านั้น — **ไม่มี text-search ข้าม field, ไม่ auto-create invoice** (auto-create เป็นของ `test_odoo_counter_app.py`/KAN-71 เฉพาะ test tenant เท่านั้น ดู [[docs/adr/0003-auto-created-invoices-posted-immediately.md]])
-4. ดาวน์โหลด PDF ผ่าน `_download_invoice_pdf()` (web-session login + `/report/pdf/<report_name>/<invoice_id>`, พอร์ตมาจาก `test_odoo_counter_app.py`)
-5. พิมพ์เงียบผ่าน `subprocess.run([sumatra_path, '-print-to', printer, '-silent', pdf_path])`
+2. เช็กว่า printer นั้นยังอยู่ใน `QPrinterInfo.availablePrinterNames()` หรือไม่ (KAN-50) — ถ้าตั้งค่าไว้แต่เครื่องพิมพ์ถูกลบ/เปลี่ยนชื่อไปแล้ว emit warning คนละข้อความจาก "ยังไม่ได้ตั้งค่า" แล้ว skip ทันที เช่นกัน (**ไม่มี fallback ไปเครื่องพิมพ์อื่น**)
+3. อ่าน `sale.order` เอาฟิลด์ `x_studio_need_bill` (unwrap many2one shape) + `invoice_ids` — ถ้าค่าไม่ตรงกับ `invoice_need_bill_value` (default `"ปริ้นใบเสร็จ"`) log เฉย ๆ ไม่มี toast แล้ว return
+4. resolve invoice ที่ post แล้วผ่าน `invoice_ids → account.move (move_type=out_invoice, state=posted)` เท่านั้น — **ไม่มี text-search ข้าม field, ไม่ auto-create invoice** (auto-create เป็นของ `test_odoo_counter_app.py`/KAN-71 เฉพาะ test tenant เท่านั้น ดู [[docs/adr/0003-auto-created-invoices-posted-immediately.md]])
+5. ดาวน์โหลด PDF ผ่าน `_download_invoice_pdf()` (web-session login + `/report/pdf/<report_name>/<invoice_id>`, พอร์ตมาจาก `test_odoo_counter_app.py`)
+6. พิมพ์เงียบผ่าน `_print_pdf_via_sumatra(sumatra_path, printer, pdf_path)` — helper กลาง (KAN-50) ที่ห่อ `subprocess.run([sumatra_path, '-print-to', printer, '-silent', pdf_path], check=True, timeout=30)` ตัวเดียวกันกับที่ปุ่ม "พิมพ์ทดสอบ" ใน settings dialog เรียกใช้ ทำให้สอง path พิมพ์ผ่าน pipeline เดียวกันจริง ๆ ไม่ใช่ reimplementation คนละที่
 
 Signal: `print_status(level, message)` โดย `level` เป็น `'ok'|'checking'|'warn'` — `MainWindow._on_invoice_print_status` เอาไปแสดงใน `lbl_status` เดียวกับ barcode/camera/Odoo status (สีเขียว/เทา/แดงอ่อน)
 
-Config keys ใหม่ใน `crop_config.json` (อ่านผ่าน `_load_invoice_config()`): `invoice_printer_name` (default `""` — ตั้งใจไม่มี fallback), `invoice_report_id` (default `1204`, ต้องยืนยันกับ production ก่อนใช้จริง), `invoice_sumatra_path`, `invoice_need_bill_field`, `invoice_need_bill_value`. ยังไม่มี settings UI (T4/KAN-50) — ตั้งค่า printer ด้วยการแก้ไฟล์ JSON เองไปก่อน.
+Config keys ใหม่ใน `crop_config.json` (อ่านผ่าน `_load_invoice_config()`): `invoice_printer_name` (default `""` — ตั้งใจไม่มี fallback), `invoice_report_id` (default `1204`, ต้องยืนยันกับ production ก่อนใช้จริง), `invoice_sumatra_path`, `invoice_need_bill_field`, `invoice_need_bill_value`. Settings UI มีแล้ว (T4/KAN-50) — ตั้งค่า printer ผ่าน dropdown ในหน้าตั้งค่าเฟือง (`CropSettingsDialog`) แทนการแก้ไฟล์ JSON เอง; บันทึกผ่าน `_save_invoice_printer()` (merge-based เหมือน `_save_settings()`).
 
 Scope: นี่คือ walking skeleton (T1/KAN-47) เท่านั้น — SumatraPDF ยังรันจาก local install (bundling เป็น T2/KAN-48), config ยังอยู่ใน `crop_config.json` เดิม (ย้ายไป `%LOCALAPPDATA%` เป็น T3/KAN-49), ยังไม่มี idempotency/dedupe กันสแกนซ้ำ (T5/KAN-51).
 
@@ -714,7 +715,7 @@ CPU optimization:
 
 Flow:
 
-1. อ่าน `cur_rect` และ `cur_conf` จาก `CameraWorker`
+1. อ่าน `cur_rect` และ `cur_conf` จาก `CameraWorker`, และ `cur_printer` จาก `_load_invoice_config()['printer_name']`
 2. สร้าง `CropSettingsDialog`
 3. set `_emit_raw = True` เพื่อให้ CameraWorker ส่ง raw frame preview
 4. user ลากกรอบบนภาพเพื่อเลือก counting zone
@@ -724,6 +725,8 @@ Flow:
    - `CameraWorker.set_conf(new_conf)`
    - `_save_settings(new_rect, new_conf)` ลง `%LOCALAPPDATA%\odoo-counter\config.json`
      (merge-based, ไม่ทับ key อื่นที่มีอยู่แล้ว)
+   - `_save_invoice_printer(dlg.get_printer())` — sibling function เดียวกันแต่ merge เฉพาะ
+     key `invoice_printer_name` (KAN-50)
 7. disconnect preview signal และ set `_emit_raw = False`
 
 `CropPreviewWidget`:
@@ -732,6 +735,33 @@ Flow:
 - drag เพื่อสร้าง rect
 - ถ้ากรอบเล็กกว่า 0.05 ของภาพ จะ reset เป็น full crop
 - paint image, dark overlay นอก crop, และเส้นขอบ crop
+
+### Invoice Printer picker + Test Print (KAN-50)
+
+`QGroupBox` เพิ่มเติมในหน้าเดิม ถัดจาก Confidence Threshold — ไม่แยกหน้าต่างใหม่:
+
+- `QComboBox` (`printer_combo`) เติมด้วย `QPrinterInfo.availablePrinterNames()` เป็น item
+  (`itemData` = ชื่อจริงของเครื่องพิมพ์) โดยมี item แรกเป็น placeholder `"-- ยังไม่เลือก --"`
+  (`itemData = ''`) เสมอ — ไม่มีการ auto-select เครื่องพิมพ์ตัวแรกเป็น default
+  - ยังไม่ตั้งค่า (`invoice_printer_name == ''`): placeholder ถูกเลือกไว้, `get_printer()`
+    คืน `''`
+  - ตั้งค่าไว้แล้วและเครื่องพิมพ์ยังอยู่ในระบบ: item ที่ตรงชื่อถูกเลือกไว้ (`setCurrentIndex`
+    ผ่าน `findData`)
+  - ตั้งค่าไว้แล้วแต่เครื่องพิมพ์หายไป (ถูกลบ/เปลี่ยนชื่อ): เพิ่ม item พิเศษที่แสดงชื่อเดิม
+    พร้อมข้อความ `"(ไม่พบเครื่องพิมพ์นี้ในระบบ)"` ต่อท้าย แล้วเลือกไว้ — `itemData` ยังเป็นชื่อเดิม
+    ไม่ถูกแก้ไข ดังนั้นถ้า user กด save โดยไม่เปลี่ยน selection ค่าเดิมจะถูกเขียนกลับเหมือนเดิม
+    (ไม่ silently swap ไปเครื่องพิมพ์อื่น)
+- ปุ่ม "พิมพ์ทดสอบ" (`btn_test_print` → `_on_test_print`): sync ในตัว click handler เอง
+  (ไม่มี QThread เพราะเป็น manual action ที่ไม่บ่อย) —
+  1. อ่าน printer จาก `dlg.get_printer()` ปัจจุบันใน dropdown (ไม่ใช่ค่าที่ save ไว้)
+  2. ถ้าว่างเปล่า แสดง label เตือนแล้ว return
+  3. สร้าง PDF ทดสอบหน้าเดียวผ่าน `_render_test_print_pdf()` (ใช้ `QPrinter`/`QPainter` เขียน
+     ไฟล์ไปที่ `tempfile` — ไม่ใช่ `invoices/` ซึ่งเก็บเฉพาะใบเสร็จลูกค้าที่โหลดจริงเท่านั้น)
+  4. เรียก `_print_pdf_via_sumatra(cfg['sumatra_path'], printer, pdf_path)` — helper ตัวเดียวกัน
+     กับที่ `InvoicePrintWorker.run()` ใช้พิมพ์ใบเสร็จจริง (extract ออกมาเพื่อให้ยืนยันได้ว่าสอง
+     path พิมพ์ผ่าน pipeline เดียวกันจริง)
+  5. แสดงผลลัพธ์ (สำเร็จ/ล้มเหลว) ใน `lbl_print_status` ในหน้า dialog เอง (ไม่ผ่าน toast ของ
+     main window)
 
 Confidence slider:
 

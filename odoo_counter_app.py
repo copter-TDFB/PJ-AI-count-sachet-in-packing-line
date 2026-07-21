@@ -8,6 +8,7 @@ import threading
 import queue
 import subprocess
 import itertools
+import tempfile
 from collections import deque
 _snd_counter = itertools.count()
 import xmlrpc.client
@@ -21,10 +22,11 @@ from pynput import keyboard as pynput_kb
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QGroupBox, QLineEdit, QFileDialog, QFrame,
-    QScrollArea, QDialog, QSlider
+    QScrollArea, QDialog, QSlider, QComboBox
 )
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
+from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
 
 ODOO_URL      = 'https://tdfb.odoo.com'
 ODOO_DB       = 'tdfb'
@@ -109,9 +111,21 @@ def _save_settings(rect: tuple, conf: float):
     config_path.write_text(json.dumps(d, indent=2), encoding='utf-8')
 
 
+def _save_invoice_printer(name: str):
+    """Sibling of _save_settings() for the invoice printer selection (KAN-50) — same
+    merge-based save (loads the full dict, updates only invoice_printer_name, writes back),
+    kept separate so _save_settings' own signature/behavior stays untouched."""
+    config_path = _config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    d = _load_config_dict()
+    d.update({'invoice_printer_name': name})
+    config_path.write_text(json.dumps(d, indent=2), encoding='utf-8')
+
+
 def _load_invoice_config() -> dict:
     """Invoice auto-print settings (KAN-47), read from the same crop_config.json.
-    No printer-picker UI exists yet (T4) — printer_name is set by hand-editing the file."""
+    Printer-picker UI lives in CropSettingsDialog (KAN-50) — printer_name is set there and
+    persisted via _save_invoice_printer(), no more hand-editing the JSON file."""
     d = _load_config_dict()
     printer_name    = d.get('invoice_printer_name')
     report_id       = d.get('invoice_report_id')
@@ -353,6 +367,35 @@ class BarcodeWorker(QThread):
             self.error_occurred.emit(str(e))
 
 
+def _print_pdf_via_sumatra(sumatra_path: str, printer: str, pdf_path) -> None:
+    """The one SumatraPDF silent-print invocation, shared by InvoicePrintWorker (real
+    invoices) and CropSettingsDialog's Test Print button (KAN-50) — extracted so both call
+    sites are provably identical rather than two parallel reimplementations."""
+    subprocess.run(
+        [sumatra_path, '-print-to', printer, '-silent', str(pdf_path)],
+        check=True, timeout=30
+    )
+
+
+def _render_test_print_pdf() -> Path:
+    """Renders a small one-page test PDF via QPrinter/QPainter (KAN-50), for the settings
+    dialog's Test Print button. Written under tempfile's directory — deliberately not
+    invoices/, which is reserved for downloaded customer invoices (KAN-47)."""
+    fd, tmp_name = tempfile.mkstemp(suffix='.pdf', prefix='odoo_counter_test_print_')
+    os.close(fd)
+    path = Path(tmp_name)
+    printer = QPrinter(QPrinter.PrinterMode.ScreenResolution)
+    printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+    printer.setOutputFileName(str(path))
+    painter = QPainter(printer)
+    try:
+        painter.drawText(200, 200, "AI นับซอง — Test Print")
+        painter.drawText(200, 260, f"เวลา: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    finally:
+        painter.end()
+    return path
+
+
 # ── Worker: พิมพ์ใบกำกับภาษีอัตโนมัติ (invoice auto-print, KAN-47) ──
 class InvoicePrintWorker(QThread):
     print_status = pyqtSignal(str, str)  # ('ok'|'checking'|'warn'), message
@@ -369,6 +412,12 @@ class InvoicePrintWorker(QThread):
             if not printer:
                 self.print_status.emit('warn', 'ยังไม่ได้ตั้งค่าเครื่องพิมพ์ใบเสร็จ')
                 print(f"[Invoice] {self.picking_name}: printer not configured, skip", flush=True)
+                return
+            if printer not in QPrinterInfo.availablePrinterNames():
+                # KAN-50: configured printer was removed/renamed — pause and warn instead of
+                # silently falling back to a different printer.
+                self.print_status.emit('warn', f'ไม่พบเครื่องพิมพ์ "{printer}" ในระบบ — ตรวจสอบใน settings')
+                print(f"[Invoice] {self.picking_name}: configured printer '{printer}' not available, skip", flush=True)
                 return
 
             OdooConn.ensure()
@@ -412,10 +461,7 @@ class InvoicePrintWorker(QThread):
                 self.print_status.emit('warn', f'ดึงใบเสร็จ {invoice_name} ไม่สำเร็จ')
                 return
 
-            subprocess.run(
-                [cfg['sumatra_path'], '-print-to', printer, '-silent', str(path)],
-                check=True, timeout=30
-            )
+            _print_pdf_via_sumatra(cfg['sumatra_path'], printer, path)
             self.print_status.emit('ok', f'พิมพ์ใบเสร็จ {invoice_name} แล้ว')
             print(f"[Invoice] {self.picking_name}: printed {invoice_name}", flush=True)
 
@@ -965,7 +1011,7 @@ class CropPreviewWidget(QWidget):
 
 
 class CropSettingsDialog(QDialog):
-    def __init__(self, current_rect: tuple, current_conf: float, parent=None):
+    def __init__(self, current_rect: tuple, current_conf: float, current_printer: str = '', parent=None):
         super().__init__(parent)
         self.setWindowTitle("ตั้งค่ากล้อง / Detection")
         self.resize(960, 720)
@@ -1023,6 +1069,39 @@ class CropSettingsDialog(QDialog):
         cl.addWidget(self.lbl_conf, 0)
         layout.addWidget(conf_box)
 
+        # ── Invoice printer (KAN-50) ───────────────────────
+        printer_box = QGroupBox("เครื่องพิมพ์ใบเสร็จ (Invoice Printer)")
+        printer_box.setStyleSheet(
+            "QGroupBox { color:#aaa; font-size:12px; border:1px solid #333;"
+            "border-radius:6px; margin-top:8px; padding-top:8px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left:10px; padding:0 6px; }"
+        )
+        pv = QVBoxLayout(printer_box)
+        pv.setContentsMargins(12, 10, 12, 10)
+        pv.setSpacing(6)
+
+        pl = QHBoxLayout()
+        pl.setSpacing(10)
+
+        self.printer_combo = QComboBox()
+        self._populate_printer_combo(current_printer)
+
+        self.btn_test_print = QPushButton("พิมพ์ทดสอบ")
+        self.btn_test_print.setFixedHeight(32)
+        self.btn_test_print.setStyleSheet("background:#37474F; color:white; font-size:13px; border-radius:6px;")
+        self.btn_test_print.clicked.connect(self._on_test_print)
+
+        pl.addWidget(QLabel("เครื่องพิมพ์:"), 0)
+        pl.addWidget(self.printer_combo, 1)
+        pl.addWidget(self.btn_test_print, 0)
+        pv.addLayout(pl)
+
+        self.lbl_print_status = QLabel("")
+        self.lbl_print_status.setStyleSheet("color:#ccc; font-size:12px;")
+        pv.addWidget(self.lbl_print_status)
+
+        layout.addWidget(printer_box)
+
         btn_row    = QHBoxLayout()
         btn_reset  = QPushButton("รีเซ็ตเต็มจอ")
         btn_cancel = QPushButton("ยกเลิก")
@@ -1070,6 +1149,50 @@ class CropSettingsDialog(QDialog):
 
     def get_conf(self) -> float:
         return self._conf
+
+    def _populate_printer_combo(self, current_printer: str):
+        """Fills the dropdown from QPrinterInfo.availablePrinterNames() (KAN-50). Two
+        deliberate non-obvious states:
+        - not configured yet (current_printer == ''): a neutral placeholder item is
+          pre-selected — the first real printer is never auto-selected as a default.
+        - configured but no longer installed (current_printer set but absent from the
+          available list): the configured name is still shown, pre-selected, and annotated
+          so the operator can see what's configured before choosing a real one, instead of
+          silently swapping to something else.
+        """
+        self.printer_combo.clear()
+        available = QPrinterInfo.availablePrinterNames()
+        self.printer_combo.addItem("-- ยังไม่เลือก --", "")
+        for name in available:
+            self.printer_combo.addItem(name, name)
+        if current_printer:
+            if current_printer in available:
+                idx = self.printer_combo.findData(current_printer)
+            else:
+                self.printer_combo.addItem(f"{current_printer}  (ไม่พบเครื่องพิมพ์นี้ในระบบ)", current_printer)
+                idx = self.printer_combo.count() - 1
+            self.printer_combo.setCurrentIndex(idx)
+        else:
+            self.printer_combo.setCurrentIndex(0)
+
+    def get_printer(self) -> str:
+        return self.printer_combo.currentData() or ''
+
+    def _on_test_print(self):
+        printer = self.get_printer()
+        if not printer:
+            self.lbl_print_status.setText("กรุณาเลือกเครื่องพิมพ์ก่อนพิมพ์ทดสอบ")
+            self.lbl_print_status.setStyleSheet("color:#FFB300; font-size:12px;")
+            return
+        try:
+            cfg = _load_invoice_config()
+            pdf_path = _render_test_print_pdf()
+            _print_pdf_via_sumatra(cfg['sumatra_path'], printer, pdf_path)
+            self.lbl_print_status.setText(f"ส่งพิมพ์ทดสอบไปที่ {printer} แล้ว")
+            self.lbl_print_status.setStyleSheet("color:#66BB6A; font-size:12px;")
+        except Exception as e:
+            self.lbl_print_status.setText(f"พิมพ์ทดสอบล้มเหลว: {e}")
+            self.lbl_print_status.setStyleSheet("color:#EF5350; font-size:12px;")
 
 
 # ── หน้าต่างนับ (เด้งขึ้นเมื่อเจอ Excellent/Houjicha 3g) ────
@@ -1841,17 +1964,20 @@ class MainWindow(QMainWindow):
             return
         cur_rect = self._camera_worker._crop_rect
         cur_conf = self._camera_worker.conf
-        dlg = CropSettingsDialog(cur_rect, cur_conf, parent=self)
+        cur_printer = _load_invoice_config()['printer_name']
+        dlg = CropSettingsDialog(cur_rect, cur_conf, cur_printer, parent=self)
         self._camera_worker.set_emit_raw(True)
         self._camera_worker.raw_frame_ready.connect(dlg.update_frame)
         try:
             if dlg.exec() == QDialog.DialogCode.Accepted:
                 new_rect = dlg.get_rect()
                 new_conf = dlg.get_conf()
+                new_printer = dlg.get_printer()
                 self._camera_worker.set_crop_rect(new_rect)
                 self._camera_worker.set_conf(new_conf)
                 try:
                     _save_settings(new_rect, new_conf)
+                    _save_invoice_printer(new_printer)
                     self.lbl_status.setText(
                         f"บันทึก: crop {new_rect[2]*100:.0f}%×{new_rect[3]*100:.0f}%, conf {new_conf:.2f}"
                     )
