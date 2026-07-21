@@ -35,7 +35,7 @@ python batch_eval_app.py
 
 There is no test suite, linter, or CI. Verification is manual: run from source, run a batch eval on a small dataset, then test the built `launcher.exe`. If you cannot run the app (needs camera/Odoo/internet/credentials), say so explicitly rather than claiming it works.
 
-Key dependencies (no requirements.txt — installed ad hoc): `PyQt6`, `opencv-python` (`cv2`), `numpy`, `ultralytics`, `openvino`, `pynput`, `websockets`, `truststore`, `certifi`, `PyInstaller`.
+Key dependencies (no requirements.txt — installed ad hoc): `PyQt6`, `opencv-python` (`cv2`), `numpy`, `ultralytics`, `openvino`, `pynput`, `websockets`, `truststore`, `certifi`, `requests`, `PyInstaller`.
 
 ## Architecture (the parts that span files)
 
