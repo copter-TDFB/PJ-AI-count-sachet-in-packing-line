@@ -145,25 +145,48 @@ def _load_invoice_config() -> dict:
 
 
 # ── Connection cache ──────────────────────────────────────────
+class _LockingProxy:
+    """Wraps a shared xmlrpc.client.ServerProxy so every RPC call serializes on one lock.
+    ServerProxy keeps a single keep-alive HTTP connection; BarcodeWorker and InvoicePrintWorker
+    run as separate QThreads and both call execute_kw on the same cached instance — without
+    this, concurrent calls corrupt the connection's state (http.client.CannotSendRequest:
+    Request-sent), which is what KAN-47's invoice download was silently hitting.
+    """
+    def __init__(self, proxy, lock: threading.Lock):
+        self._proxy = proxy
+        self._lock = lock
+
+    def __getattr__(self, name):
+        attr = getattr(self._proxy, name)
+        def locked_call(*args, **kwargs):
+            with self._lock:
+                return attr(*args, **kwargs)
+        return locked_call
+
+
 class OdooConn:
     _uid    = None
     _models = None
+    _lock   = threading.Lock()
 
     @classmethod
     def ensure(cls):
         if cls._uid is None:
-            common = xmlrpc.client.ServerProxy(
-                f"{ODOO_URL}/xmlrpc/2/common",
-                transport=_PingTransport(timeout=10.0),
-            )
-            uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_PASSWORD, {})
-            if not uid:
-                raise RuntimeError("Login ไม่ผ่าน")
-            cls._uid    = uid
-            cls._models = xmlrpc.client.ServerProxy(
-                f"{ODOO_URL}/xmlrpc/2/object",
-                transport=_PingTransport(timeout=10.0),
-            )
+            with cls._lock:
+                if cls._uid is None:
+                    common = xmlrpc.client.ServerProxy(
+                        f"{ODOO_URL}/xmlrpc/2/common",
+                        transport=_PingTransport(timeout=10.0),
+                    )
+                    uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_PASSWORD, {})
+                    if not uid:
+                        raise RuntimeError("Login ไม่ผ่าน")
+                    raw_models = xmlrpc.client.ServerProxy(
+                        f"{ODOO_URL}/xmlrpc/2/object",
+                        transport=_PingTransport(timeout=10.0),
+                    )
+                    cls._models = _LockingProxy(raw_models, cls._lock)
+                    cls._uid    = uid
 
     @classmethod
     def reset(cls):
