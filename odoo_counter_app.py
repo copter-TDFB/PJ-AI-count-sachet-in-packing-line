@@ -1184,6 +1184,7 @@ class CropSettingsDialog(QDialog):
             self.lbl_print_status.setText("กรุณาเลือกเครื่องพิมพ์ก่อนพิมพ์ทดสอบ")
             self.lbl_print_status.setStyleSheet("color:#FFB300; font-size:12px;")
             return
+        pdf_path = None
         try:
             cfg = _load_invoice_config()
             pdf_path = _render_test_print_pdf()
@@ -1193,6 +1194,9 @@ class CropSettingsDialog(QDialog):
         except Exception as e:
             self.lbl_print_status.setText(f"พิมพ์ทดสอบล้มเหลว: {e}")
             self.lbl_print_status.setStyleSheet("color:#EF5350; font-size:12px;")
+        finally:
+            if pdf_path is not None:
+                pdf_path.unlink(missing_ok=True)
 
 
 # ── หน้าต่างนับ (เด้งขึ้นเมื่อเจอ Excellent/Houjicha 3g) ────
