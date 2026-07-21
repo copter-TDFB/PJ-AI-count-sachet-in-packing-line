@@ -23,3 +23,6 @@ manual-html-preview.png
 
 # pm-bridge task packets (local orchestration only)
 .pm-bridge/
+
+# Claude Code local state (task worktrees, session config)
+.claude/

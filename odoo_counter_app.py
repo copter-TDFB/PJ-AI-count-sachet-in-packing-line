@@ -122,6 +122,16 @@ def _save_invoice_printer(name: str):
     config_path.write_text(json.dumps(d, indent=2), encoding='utf-8')
 
 
+def _default_sumatra_path() -> str:
+    """build.ps1 bundles a portable SumatraPDF.exe under app/SumatraPDF/ so a fresh machine
+    needs zero setup; fall back to the common per-machine install path if it's missing
+    (e.g. running from source without the bundled copy)."""
+    bundled = _get_base_dir() / 'SumatraPDF' / 'SumatraPDF.exe'
+    if bundled.exists():
+        return str(bundled)
+    return r'C:\Program Files\SumatraPDF\SumatraPDF.exe'
+
+
 def _load_invoice_config() -> dict:
     """Invoice auto-print settings (KAN-47), read from the same crop_config.json.
     Printer-picker UI lives in CropSettingsDialog (KAN-50) — printer_name is set there and
@@ -136,7 +146,7 @@ def _load_invoice_config() -> dict:
         'printer_name':    printer_name if isinstance(printer_name, str) else '',
         'report_id':       report_id if isinstance(report_id, int) else 1204,
         'sumatra_path':    sumatra_path if isinstance(sumatra_path, str) and sumatra_path
-                           else r'C:\Program Files\SumatraPDF\SumatraPDF.exe',
+                           else _default_sumatra_path(),
         'need_bill_field': need_bill_field if isinstance(need_bill_field, str) and need_bill_field
                            else 'x_studio_need_bill',
         'need_bill_value': need_bill_value if isinstance(need_bill_value, str) and need_bill_value

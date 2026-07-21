@@ -50,6 +50,23 @@ if (Test-Path "ai_3g_v12_openvino_model") {
 Get-ChildItem -Filter "*.mp3" | Copy-Item -Destination "$RELEASE/app/"
 Copy-Item dist/launcher.exe "$RELEASE/launcher.exe"
 
+# Bundle a portable SumatraPDF.exe for invoice auto-print (KAN-47) so target machines need
+# zero setup — _default_sumatra_path() in odoo_counter_app.py prefers app/SumatraPDF/SumatraPDF.exe
+# over the C:\Program Files\... fallback whenever it's present.
+$SumatraCandidates = @(
+    "$env:ProgramFiles\SumatraPDF\SumatraPDF.exe",
+    "${env:ProgramFiles(x86)}\SumatraPDF\SumatraPDF.exe",
+    "$env:LOCALAPPDATA\SumatraPDF\SumatraPDF.exe"
+)
+$SumatraSrc = $SumatraCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($SumatraSrc) {
+    Write-Host "==> bundling SumatraPDF from $SumatraSrc"
+    New-Item -ItemType Directory -Path "$RELEASE/app/SumatraPDF" | Out-Null
+    Copy-Item $SumatraSrc "$RELEASE/app/SumatraPDF/SumatraPDF.exe"
+} else {
+    Write-Host "WARNING: SumatraPDF.exe not found on this machine - invoice auto-print will need it installed on target machines" -ForegroundColor Yellow
+}
+
 # Out-File -Encoding utf8 ของ PowerShell 5.1 ใส่ BOM (﻿) ทำให้ parse_version พัง — ใช้ API ตรงเขียน UTF-8 no-BOM
 [System.IO.File]::WriteAllText("$PSScriptRoot\$RELEASE\app\version.txt", $Version, (New-Object System.Text.UTF8Encoding $false))
 
