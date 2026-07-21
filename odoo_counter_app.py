@@ -6,9 +6,12 @@ import time
 import asyncio
 import threading
 import queue
+import subprocess
 import itertools
+from collections import deque
 _snd_counter = itertools.count()
 import xmlrpc.client
+import requests
 import cv2
 import numpy as np
 import websockets
@@ -106,6 +109,27 @@ def _save_settings(rect: tuple, conf: float):
     config_path.write_text(json.dumps(d, indent=2), encoding='utf-8')
 
 
+def _load_invoice_config() -> dict:
+    """Invoice auto-print settings (KAN-47), read from the same crop_config.json.
+    No printer-picker UI exists yet (T4) — printer_name is set by hand-editing the file."""
+    d = _load_config_dict()
+    printer_name    = d.get('invoice_printer_name')
+    report_id       = d.get('invoice_report_id')
+    sumatra_path    = d.get('invoice_sumatra_path')
+    need_bill_field = d.get('invoice_need_bill_field')
+    need_bill_value = d.get('invoice_need_bill_value')
+    return {
+        'printer_name':    printer_name if isinstance(printer_name, str) else '',
+        'report_id':       report_id if isinstance(report_id, int) else 1204,
+        'sumatra_path':    sumatra_path if isinstance(sumatra_path, str) and sumatra_path
+                           else r'C:\Program Files\SumatraPDF\SumatraPDF.exe',
+        'need_bill_field': need_bill_field if isinstance(need_bill_field, str) and need_bill_field
+                           else 'x_studio_need_bill',
+        'need_bill_value': need_bill_value if isinstance(need_bill_value, str) and need_bill_value
+                           else 'ปริ้นใบเสร็จ',
+    }
+
+
 # ── Connection cache ──────────────────────────────────────────
 class OdooConn:
     _uid    = None
@@ -114,12 +138,18 @@ class OdooConn:
     @classmethod
     def ensure(cls):
         if cls._uid is None:
-            common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
+            common = xmlrpc.client.ServerProxy(
+                f"{ODOO_URL}/xmlrpc/2/common",
+                transport=_PingTransport(timeout=10.0),
+            )
             uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_PASSWORD, {})
             if not uid:
                 raise RuntimeError("Login ไม่ผ่าน")
             cls._uid    = uid
-            cls._models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
+            cls._models = xmlrpc.client.ServerProxy(
+                f"{ODOO_URL}/xmlrpc/2/object",
+                transport=_PingTransport(timeout=10.0),
+            )
 
     @classmethod
     def reset(cls):
@@ -127,12 +157,58 @@ class OdooConn:
         cls._models = None
 
 
+def _download_invoice_pdf(models, uid, invoice_id: int, invoice_name: str, report_id: int) -> Path | None:
+    """Web-session login + /report/pdf download. None on any failure. Ported from
+    test_odoo_counter_app.py (KAN-70/71 prototype); report_id is config-driven here
+    instead of a hardcoded module constant (KAN-47)."""
+    try:
+        with requests.Session() as session:
+            resp = session.post(
+                f"{ODOO_URL}/web/session/authenticate",
+                json={
+                    'jsonrpc': '2.0', 'method': 'call',
+                    'params': {'db': ODOO_DB, 'login': ODOO_USER, 'password': ODOO_PASSWORD},
+                },
+                timeout=30,
+            )
+            result = resp.json().get('result')
+            if not result or not result.get('uid'):
+                return None
+
+            reports = models.execute_kw(
+                ODOO_DB, uid, ODOO_PASSWORD,
+                'ir.actions.report', 'read',
+                [[report_id]],
+                {'fields': ['report_name']}
+            )
+            if not reports:
+                return None
+            if reports[0].get('model') != 'account.move':
+                return None
+            report_name = reports[0]['report_name']
+
+            r = session.get(f"{ODOO_URL}/report/pdf/{report_name}/{invoice_id}", timeout=60)
+            if r.status_code != 200 or 'pdf' not in r.headers.get('Content-Type', '').lower():
+                return None
+
+            out_dir = _get_base_dir() / 'invoices'
+            out_dir.mkdir(exist_ok=True)
+            safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in invoice_name)
+            path = out_dir / f"{safe_name}.pdf"
+            path.write_bytes(r.content)
+            return path
+    except Exception as e:
+        print(f"[Invoice] ดาวน์โหลดไม่สำเร็จ: {e}", flush=True)
+        return None
+
+
 # ── Worker: ค้นหา picking จาก barcode ───────────────────────
 class BarcodeWorker(QThread):
-    data_ready     = pyqtSignal(dict)
-    not_found      = pyqtSignal(str)
-    error_occurred = pyqtSignal(str)
-    origin_ready   = pyqtSignal(str, object)  # fire ทันทีที่เจอ picking ใน Odoo (มี/ไม่มีสินค้า 3g ก็ส่ง)
+    data_ready         = pyqtSignal(dict)
+    not_found          = pyqtSignal(str)
+    error_occurred     = pyqtSignal(str)
+    origin_ready       = pyqtSignal(str, object)  # fire ทันทีที่เจอ picking ใน Odoo (มี/ไม่มีสินค้า 3g ก็ส่ง)
+    invoice_job_ready  = pyqtSignal(int, str)     # sale_order_id, picking_name — independent of origin/3g-move outcome
 
     def __init__(self, barcode: str):
         super().__init__()
@@ -158,8 +234,8 @@ class BarcodeWorker(QThread):
             picking = pickings[0]
             origin = (picking.get('origin') or '').strip() if isinstance(picking.get('origin'), str) else ''
             shop = None
+            sale_id = picking.get('sale_id')
             try:
-                sale_id = picking.get('sale_id')
                 if isinstance(sale_id, (list, tuple)) and sale_id and isinstance(sale_id[0], int):
                     sale = models.execute_kw(
                         ODOO_DB, uid, ODOO_PASSWORD,
@@ -178,6 +254,10 @@ class BarcodeWorker(QThread):
                 pass
             if origin:
                 self.origin_ready.emit(origin, shop)
+            # Invoice trigger (KAN-47): independent of origin being blank and of the
+            # 3g-move check below — fires whenever the picking has a sale order at all.
+            if isinstance(sale_id, (list, tuple)) and sale_id and isinstance(sale_id[0], int):
+                self.invoice_job_ready.emit(sale_id[0], picking['name'])
 
             moves = models.execute_kw(
                 ODOO_DB, uid, ODOO_PASSWORD,
@@ -271,6 +351,78 @@ class BarcodeWorker(QThread):
         except Exception as e:
             OdooConn.reset()
             self.error_occurred.emit(str(e))
+
+
+# ── Worker: พิมพ์ใบกำกับภาษีอัตโนมัติ (invoice auto-print, KAN-47) ──
+class InvoicePrintWorker(QThread):
+    print_status = pyqtSignal(str, str)  # ('ok'|'checking'|'warn'), message
+
+    def __init__(self, sale_order_id: int, picking_name: str):
+        super().__init__()
+        self.sale_order_id = sale_order_id
+        self.picking_name  = picking_name
+
+    def run(self):
+        try:
+            cfg = _load_invoice_config()
+            printer = cfg['printer_name']
+            if not printer:
+                self.print_status.emit('warn', 'ยังไม่ได้ตั้งค่าเครื่องพิมพ์ใบเสร็จ')
+                print(f"[Invoice] {self.picking_name}: printer not configured, skip", flush=True)
+                return
+
+            OdooConn.ensure()
+            uid, models = OdooConn._uid, OdooConn._models
+
+            orders = models.execute_kw(
+                ODOO_DB, uid, ODOO_PASSWORD,
+                'sale.order', 'read',
+                [[self.sale_order_id]],
+                {'fields': [cfg['need_bill_field'], 'invoice_ids']}
+            )
+            if not orders:
+                print(f"[Invoice] {self.picking_name}: sale order not found, skip", flush=True)
+                return
+
+            need_bill_field = orders[0].get(cfg['need_bill_field'])
+            need_bill = need_bill_field[1] if isinstance(need_bill_field, (list, tuple)) else (need_bill_field or '')
+            if (need_bill or '').strip() != cfg['need_bill_value']:
+                print(f"[Invoice] {self.picking_name}: need-bill flag not set, skip", flush=True)
+                return
+
+            invoice_ids = orders[0].get('invoice_ids') or []
+            if not invoice_ids:
+                self.print_status.emit('warn', f'{self.picking_name}: ยังไม่มีใบกำกับภาษี')
+                return
+
+            invoices = models.execute_kw(
+                ODOO_DB, uid, ODOO_PASSWORD,
+                'account.move', 'search_read',
+                [[['id', 'in', invoice_ids], ['move_type', '=', 'out_invoice'], ['state', '=', 'posted']]],
+                {'fields': ['name'], 'limit': 1, 'order': 'id desc'}
+            )
+            if not invoices:
+                self.print_status.emit('warn', f'{self.picking_name}: ไม่มีใบกำกับภาษีที่ post แล้ว')
+                return
+            invoice_name = invoices[0]['name']
+
+            self.print_status.emit('checking', f'กำลังดึงใบเสร็จ {invoice_name}...')
+            path = _download_invoice_pdf(models, uid, invoices[0]['id'], invoice_name, cfg['report_id'])
+            if not path:
+                self.print_status.emit('warn', f'ดึงใบเสร็จ {invoice_name} ไม่สำเร็จ')
+                return
+
+            subprocess.run(
+                [cfg['sumatra_path'], '-print-to', printer, '-silent', str(path)],
+                check=True, timeout=30
+            )
+            self.print_status.emit('ok', f'พิมพ์ใบเสร็จ {invoice_name} แล้ว')
+            print(f"[Invoice] {self.picking_name}: printed {invoice_name}", flush=True)
+
+        except Exception as e:
+            OdooConn.reset()
+            self.print_status.emit('warn', f'{self.picking_name}: {e}')
+            print(f"[Invoice] {self.picking_name}: error — {e}", flush=True)
 
 
 # ── Worker: บันทึก log note กลับ Odoo ───────────────────────
@@ -1608,6 +1760,8 @@ class MainWindow(QMainWindow):
         self._counter_panel.closed.connect(self._on_counter_closed)
         self._camera_worker = None
         self._workers: set  = set()
+        self._invoice_queue: deque = deque()
+        self._invoice_worker: InvoicePrintWorker | None = None
 
         self._barcode_listener = GlobalBarcodeListener()
         self._barcode_listener.barcode_ready.connect(self._on_barcode_scanned)
@@ -1773,9 +1927,33 @@ class MainWindow(QMainWindow):
         w.not_found.connect(self._on_not_found)
         w.error_occurred.connect(self._on_error)
         w.origin_ready.connect(self._bridge.broadcast)
+        w.invoice_job_ready.connect(self._on_invoice_job_ready)
         w.finished.connect(lambda: self._workers.discard(w))
         self._workers.add(w)
         w.start()
+
+    def _on_invoice_job_ready(self, sale_order_id: int, picking_name: str):
+        self._invoice_queue.append((sale_order_id, picking_name))
+        self._pump_invoice_queue()
+
+    def _pump_invoice_queue(self):
+        if self._invoice_worker is not None or not self._invoice_queue:
+            return
+        sale_order_id, picking_name = self._invoice_queue.popleft()
+        w = InvoicePrintWorker(sale_order_id, picking_name)
+        w.print_status.connect(self._on_invoice_print_status)
+        w.finished.connect(self._on_invoice_worker_finished)
+        self._invoice_worker = w
+        w.start()
+
+    def _on_invoice_worker_finished(self):
+        self._invoice_worker = None
+        self._pump_invoice_queue()
+
+    def _on_invoice_print_status(self, level: str, message: str):
+        color = {'ok': '#4CAF50', 'checking': '#888', 'warn': '#EF9A9A'}.get(level, '#888')
+        self.lbl_status.setStyleSheet(f"color:{color}; font-size:12px;")
+        self.lbl_status.setText(message)
 
     def _on_counter_closed(self):
         if self._camera_worker:
