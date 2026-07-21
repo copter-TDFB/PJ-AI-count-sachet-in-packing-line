@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
 <meta charset="UTF-8">
-<title>AI Sachet Counter — Barcode Bridge → Tampermonkey Platform Flow</title>
+<title>AI Sachet Counter — Bidirectional Barcode Bridge Flow</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -104,6 +104,7 @@
     background: white; border-radius: 8px;
     padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     overflow-x: auto;
+    margin-bottom: 20px;
   }
   svg.flowchart { display: block; margin: 0 auto; font-family: inherit; }
 
@@ -112,12 +113,13 @@
 </head>
 <body>
 <header>
-  <h1>AI Sachet Counter — Barcode Bridge → Tampermonkey Platform Flow</h1>
-  <p>Swimlane flowchart : <strong>scan barcode</strong> → BarcodeWorker (Odoo lookup) → <strong>BarcodeBridgeWorker.broadcast(origin)</strong> → Tampermonkey <strong>detectPlatform → cross-tab relay</strong> → automation triggered (TikTok / Shopee / Odoo / Lazada)</p>
-  <div class="meta">ISO 5807 / ANSI 1970 symbols  •  source : odoo_counter_app.py + combined-auto-print.user.js v1.9  •  scope : happy path</div>
+  <h1>AI Sachet Counter — Bidirectional Barcode Bridge Flow</h1>
+  <p><strong>A · ใบปะหน้า:</strong> สแกน → ส่ง order ไป Browser automation ทันที <strong>ไม่รอ Validate</strong> (TikTok / Shopee / Odoo / Lazada) &nbsp;|&nbsp; <strong>B · Invoice/PDF:</strong> User กด Validate → Browser ส่ง <code>odoo_validate_clicked</code> กลับ App → ตรวจ pending Pack จน <strong>state = done</strong> แล้วจึงทำ invoice/PDF</p>
+  <div class="meta">ISO 5807 / ANSI 1970 symbols  •  source : test_odoo_counter_app.py + combined-auto-print.user.js  •  scope : outbound platform automation + inbound Validate trigger + Pack done gate</div>
   <nav>
     <a href="PROCESS_FLOW.html">← Launcher + Counting flow (PROCESS_FLOW.html)</a>
     <span class="current">Bridge → Platform flow (this page)</span>
+    <a href="FLOW_SWIMLANE_VALIDATE.html">Validate → Invoice PDF flow →</a>
   </nav>
 </header>
 
@@ -129,6 +131,7 @@
       <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="50" y2="6" stroke="#333" stroke-width="1.8"/><polygon points="50,2 58,6 50,10" fill="#333"/></svg><span>Flow ปกติ</span></div>
       <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="58" y2="6" stroke="#444" stroke-width="1.8"/><polygon points="2,2 -6,6 2,10" fill="#444" transform="translate(8,0)"/><polygon points="50,2 58,6 50,10" fill="#444"/></svg><span>Bidirectional (req/response)</span></div>
       <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="50" y2="6" stroke="#2E7D32" stroke-width="1.8"/><polygon points="50,2 58,6 50,10" fill="#2E7D32"/></svg><span>Fire-and-forget / Cross-tab</span></div>
+      <div class="item"><svg viewBox="0 0 60 12"><line x1="2" y1="6" x2="50" y2="6" stroke="#C62828" stroke-width="1.8" stroke-dasharray="6 4"/><polygon points="50,2 58,6 50,10" fill="#C62828"/></svg><span>รอแล้ววนเช็กใหม่</span></div>
     </div>
   </section>
 
@@ -143,9 +146,10 @@
   <div class="diagram-wrap">
     <svg class="flowchart" id="chart" xmlns="http://www.w3.org/2000/svg"></svg>
   </div>
+
 </div>
 
-<footer>PROCESS_FLOW_BRIDGE.html · generated from odoo_counter_app.py + combined-auto-print.user.js v1.9</footer>
+<footer>PROCESS_FLOW_BRIDGE.html · current bidirectional flow from test_odoo_counter_app.py + combined-auto-print.user.js</footer>
 
 <script>
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -245,7 +249,7 @@ const lanes = [
   { id: 'ext',     name: 'EXTERNAL',              x: 1480, w: 220, bg: '#EBF7EE', strip: '#2E7D32' },
 ];
 const TOTAL_W = 1700;
-const TOTAL_H = 1680;
+const TOTAL_H = 2040;
 const HEADER_H = 60;
 const NODE_W   = 180;
 const NODE_W_S = 170;
@@ -276,6 +280,12 @@ const Y_CH_SH = BROWSER_LEFT + COL_W;                        // 910 — between 
 const Y_CH_OD = BROWSER_LEFT + COL_W * 3;                    // 1290 — between OD & LZ
 const Y_CH_LZ = BROWSER_RIGHT - 18;                          // 1462 — right edge
 
+// Shopee-only shop-switch sub-flow (KAN-54) — narrowed (120/140 vs the usual 170/180)
+// so its NO-branch has a clear ~40px gap to bypass through before hitting termOD's
+// left edge at COL_OD_CX - NODE_W_S/2 (1110).
+const SH_DEC_W  = 120;
+const SH_PROC_W = 120;
+
 // ===== Node definitions =====
 // [id, lane, y, type, label, w?, h?, cx?]
 const nodeDefs = [
@@ -288,15 +298,26 @@ const nodeDefs = [
 
   // DESKTOP WORKERS
   ['bcWorker', 2, 410,  'subprocess',  'BarcodeWorker (QThread)\nค้นหา picking + moves\n+ lot/exp', null, NODE_H_3],
-  ['bridge',   2, 570,  'subprocess',  'BarcodeBridgeWorker\nbroadcast(picking.origin)\nผ่าน WS :9999', null, NODE_H_3],
+  ['bridgeOut',2, 570,  'subprocess',  'A · OUTBOUND\nBarcodeBridgeWorker.broadcast()\nส่ง order ผ่าน WS :9999', null, NODE_H_3],
+  ['bridgeIn', 2, 720,  'subprocess',  'B · INBOUND\nBarcodeBridgeWorker รับ JSON\n→ validate_requested', null, NODE_H_3],
+  ['pendingPack', 1, 410, 'process',    'B · INVOICE PENDING\nเก็บ picking_id + sale_order_id\nยังไม่ทำ invoice', null, NODE_H_3],
+  ['startCheck',  1, 850, 'process',    'Validate event + pending Pack\n→ spawn\nInvoiceAfterValidateWorker', null, NODE_H_3],
+  ['waitDone',    2, 1030,'subprocess', 'อ่าน picking.state แบบ sequential\nรอ response → เว้น 1 วินาที\nวนสูงสุด 30 วินาที', 210, NODE_H_3],
+  ['doneDecision',2, 1210,'decision',   'WH300/Pack\nstate == done ?', DEC_W, DEC_H],
+  ['timeoutDecision',2,1410,'decision', 'ครบ 30 วินาที\nแล้วหรือยัง?', DEC_W, DEC_H],
+  ['timeoutTerm', 1, 1410,'terminator', 'Timeout\nไม่สร้าง invoice / PDF\nรอ Validate trigger ใหม่', null, NODE_H_3],
+  ['invoiceNext', 1, 1580,'terminator', 'Pack done\n→ invoice gate\n→ create/post/PDF', null, NODE_H_3],
 
   // EXTERNAL
   ['odoo',     4, 410,  'cylinder',    'Odoo XML-RPC\nstock.picking\n(x_studio_tracking_no)', null, NODE_H_3],
+  ['odooState',4, 1030, 'cylinder',    'Odoo XML-RPC\nstock.picking read\n→ state', null, NODE_H_3],
 
   // BROWSER spine (centered)
-  ['wsRecv',   3, 720,  'data',        'ws.onmessage\nรับ origin (raw string)',  null, NODE_H_2, BROWSER_MID],
-  ['handle',   3, 850,  'process',     'handleOrderInput(barcode)\nbusy lock check',     null, NODE_H_2, BROWSER_MID],
-  ['detect',   3, 980,  'decision',    'detectPlatform(text)\n──────────────\n/^\\d{18}$/ → tiktok\n/^[A-Z0-9]{6,25}$/i\n+ has letter → shopee\n/^S\\d{4,6}$/ → odoo\n/^\\d{16}$/ → lazada',
+  ['wsRecv',   3, 720,  'data',        'ws.onmessage\nJSON.parse(evt.data)\n→ {order, platform, shop}',  210, NODE_H_3, BROWSER_MID],
+  ['validateBtn', 3, 130, 'manualInput','User กด Validate\nหน้า /scoped_app/barcode/', 210, NODE_H_2, COL_OD_CX],
+  ['validateEvent',3,280,'process',     'Tampermonkey click listener\nws.send({type:\n"odoo_validate_clicked"})', 220, NODE_H_3, COL_OD_CX],
+  ['handle',   3, 850,  'process',     'handleOrderInput()\nรับ v2Payload + busy lock check',     200, NODE_H_2, BROWSER_MID],
+  ['detect',   3, 980,  'decision',    'platform (v2Payload.platform ก่อน / regex fallback)\n──────────────\n/^\\d{18}$/ → tiktok\n/^[A-Z0-9]{6,25}$/i\n+ has letter → shopee\n/^S\\d{4,6}$/ or /^MZS-\\d+$/ → odoo\n/^\\d{16}$/ → lazada',
                                        320, 160, BROWSER_MID],
 
   // BROWSER 4-column row: match diamonds (per-platform)
@@ -309,11 +330,16 @@ const nodeDefs = [
   ['gmStore',  3, 1410, 'cylinder',    'GM_setValue(\'auto_print_job\')\n+ GM_addValueChangeListener\n(cross-tab via Tampermonkey storage)',
                                        310, NODE_H_3, BROWSER_MID],
 
+  // Shopee-only: auto shop-switch state machine (KAN-54) — sits below gmStore,
+  // fed by both the direct match (matchSH YES) and the cross-tab relay (gmStore listener).
+  ['shopCheckSH',  3, 1560, 'decision',    'shop ตรงกับ\nv2Payload.shop.name ?', SH_DEC_W, 110, COL_SH_CX],
+  ['switchJobSH',  3, 1740, 'subprocess',  'runShopeeSwitchJob()\nสลับร้านอัตโนมัติ 6 steps (KAN-54)\n⏱ timeout ที่ step ใดก็ได้ → ยกเลิก job + toast เตือน', SH_PROC_W, 100, COL_SH_CX],
+
   // 4 terminators
-  ['termTT',   3, 1570, 'terminator',  '▶ runTikTok()\nautomation\ntriggered', NODE_W_S, NODE_H_3, COL_TT_CX],
-  ['termSH',   3, 1570, 'terminator',  '▶ runShopee()\nautomation\ntriggered', NODE_W_S, NODE_H_3, COL_SH_CX],
-  ['termOD',   3, 1570, 'terminator',  '▶ runOdoo()\nautomation\ntriggered',   NODE_W_S, NODE_H_3, COL_OD_CX],
-  ['termLZ',   3, 1570, 'terminator',  '▶ runLazada()\nautomation\ntriggered', NODE_W_S, NODE_H_3, COL_LZ_CX],
+  ['termTT',   3, 1910, 'terminator',  '▶ runTikTok()\nautomation\ntriggered', NODE_W_S, NODE_H_3, COL_TT_CX],
+  ['termSH',   3, 1910, 'terminator',  '▶ runShopee()\nautomation\ntriggered', NODE_W_S, NODE_H_3, COL_SH_CX],
+  ['termOD',   3, 1910, 'terminator',  '▶ runOdoo()\nautomation\ntriggered',   NODE_W_S, NODE_H_3, COL_OD_CX],
+  ['termLZ',   3, 1910, 'terminator',  '▶ runLazada()\nautomation\ntriggered', NODE_W_S, NODE_H_3, COL_LZ_CX],
 ];
 
 const N = {};
@@ -524,9 +550,14 @@ const gmEntrySH = N.gmStore.cx - N.gmStore.w/2 + 120;    // ~1165
 const gmEntryOD = N.gmStore.cx - N.gmStore.w/2 + 190;    // ~1235
 const gmEntryLZ = N.gmStore.cx - N.gmStore.w/2 + 260;    // ~1305
 
+// Bypass channel for shopCheckSH's NO-branch — sits in the ~40px gap between
+// shopCheckSH's right edge and termOD's left edge (COL_OD_CX - NODE_W_S/2).
+const SH_BYPASS_X = N.shopCheckSH.cx + N.shopCheckSH.w / 2 + 22;
+
 const edges = [
   // USER → APP
-  { from: 'scan',     fs: 'r', to: 'listener', ts: 'l', label: 'HID keystroke' },
+  { from: 'scan',     fs: 'r', to: 'listener', ts: 'l', label: 'HID keystroke',
+    via: [[180, 205], [210, 205]], labelSegIdx: 1 },
   { from: 'listener', fs: 'b', to: 'mainwin',  ts: 't', label: 'barcode_ready\nsignal' },
 
   // APP → WORKERS
@@ -535,15 +566,36 @@ const edges = [
   // WORKERS ↔ EXTERNAL (bidirectional)
   { from: 'bcWorker', fs: 'r', to: 'odoo', ts: 'l',
     label: 'search_read\n→ picking.origin', style: 'bi' },
+  { from: 'bcWorker', fs: 'l', to: 'pendingPack', ts: 'r',
+    label: 'invoice_pending\n(picking + sale)' },
 
   // WORKERS internal
-  { from: 'bcWorker', fs: 'b', to: 'bridge', ts: 't', label: 'origin_ready\nsignal' },
+  { from: 'bcWorker', fs: 'b', to: 'bridgeOut', ts: 't', label: 'origin_ready\nsignal' },
+
+  // BROWSER → DESKTOP: Validate trigger (event only; Odoo state remains authoritative)
+  { from: 'validateBtn', fs: 'b', to: 'validateEvent', ts: 't', style: 'ok', label: 'trusted click' },
+  { from: 'validateEvent', fs: 'l', to: 'bridgeIn', ts: 'r', style: 'ok',
+    label: 'odoo_validate_clicked',
+    via: [[laneRight(2) + 30, N.validateEvent.cy], [laneRight(2) + 30, N.bridgeIn.cy]] },
+  { from: 'bridgeIn', fs: 'l', to: 'startCheck', ts: 'r', style: 'ok', label: 'validate_requested' },
+  { from: 'pendingPack', fs: 'b', to: 'startCheck', ts: 't', label: 'pending data' },
+  { from: 'startCheck', fs: 'r', to: 'waitDone', ts: 'l', label: 'spawn worker' },
+  { from: 'waitDone', fs: 'r', to: 'odooState', ts: 'l', style: 'bi', label: 'read state\nรอ response ให้จบ',
+    via: [[laneRight(2) + 15, N.waitDone.cy], [laneRight(2) + 15, 1160],
+          [laneLeft(4) - 15, 1160], [laneLeft(4) - 15, N.odooState.cy]] },
+  { from: 'waitDone', fs: 'b', to: 'doneDecision', ts: 't' },
+  { from: 'doneDecision', fs: 'l', to: 'invoiceNext', ts: 'r', label: 'YES' },
+  { from: 'doneDecision', fs: 'b', to: 'timeoutDecision', ts: 't', label: 'NO' },
+  { from: 'timeoutDecision', fs: 'l', to: 'timeoutTerm', ts: 'r', label: 'YES' },
+  { from: 'timeoutDecision', fs: 'r', to: 'waitDone', ts: 'l', style: 'loop',
+    label: 'NO — รอ 1 วินาที',
+    via: [[laneRight(2) - 18, N.timeoutDecision.cy], [laneRight(2) - 18, N.waitDone.cy]] },
 
   // WORKERS → BROWSER (fire-and-forget WS broadcast, via outside-lane channel)
-  { from: 'bridge', fs: 'r', to: 'wsRecv', ts: 'l',
-    label: 'ws://localhost:9999\nbroadcast text frame', style: 'ok',
+  { from: 'bridgeOut', fs: 'r', to: 'wsRecv', ts: 'l',
+    label: 'ws://localhost:9999\n{order, platform, shop}', style: 'ok',
     via: [
-      [laneRight(2) + 30, N.bridge.cy],
+      [laneRight(2) + 30, N.bridgeOut.cy],
       [laneRight(2) + 30, N.wsRecv.cy],
     ]
   },
@@ -565,8 +617,8 @@ const edges = [
   // YES → terminator (route via dedicated channels that bypass GM storage)
   { from: 'matchTT', fs: 'l', to: 'termTT', ts: 'l', label: 'YES',
     via: [[Y_CH_TT, N.matchTT.cy], [Y_CH_TT, N.termTT.cy]] },
-  { from: 'matchSH', fs: 'l', to: 'termSH', ts: 'l', label: 'YES',
-    via: [[Y_CH_SH, N.matchSH.cy], [Y_CH_SH, N.termSH.cy]] },
+  { from: 'matchSH', fs: 'l', to: 'shopCheckSH', ts: 'l', label: 'YES',
+    via: [[Y_CH_SH, N.matchSH.cy], [Y_CH_SH, N.shopCheckSH.cy]] },
   { from: 'matchOD', fs: 'r', to: 'termOD', ts: 'r', label: 'YES',
     via: [[Y_CH_OD, N.matchOD.cy], [Y_CH_OD, N.termOD.cy]] },
   { from: 'matchLZ', fs: 'r', to: 'termLZ', ts: 'r', label: 'YES',
@@ -584,13 +636,19 @@ const edges = [
 
   // GM storage → terminators (diagonal fan-out, green)
   { from: 'gmStore', fs: 'b', to: 'termTT', ts: 't', style: 'ok', label: 'listener\nin TT tab',
-    via: [[gmEntryTT, gmBy + 10], [COL_TT_CX, termTop - 24]] },
-  { from: 'gmStore', fs: 'b', to: 'termSH', ts: 't', style: 'ok', label: 'listener\nin SH tab',
-    via: [[gmEntrySH, gmBy + 10], [COL_SH_CX, termTop - 24]] },
+    via: [[gmEntryTT, gmBy + 10], [COL_TT_CX, gmBy + 40], [COL_TT_CX, termTop - 24]] },
+  { from: 'gmStore', fs: 'b', to: 'shopCheckSH', ts: 't', style: 'ok', label: 'listener\nin SH tab',
+    via: [[gmEntrySH, gmBy + 10], [COL_SH_CX, N.shopCheckSH.y - 24]] },
   { from: 'gmStore', fs: 'b', to: 'termOD', ts: 't', style: 'ok', label: 'listener\nin OD tab',
     via: [[gmEntryOD, gmBy + 10], [COL_OD_CX, termTop - 24]] },
   { from: 'gmStore', fs: 'b', to: 'termLZ', ts: 't', style: 'ok', label: 'listener\nin LZ tab',
     via: [[gmEntryLZ, gmBy + 10], [COL_LZ_CX, termTop - 24]] },
+
+  // Shopee-only: shop-switch decision + compact state-machine node (KAN-54)
+  { from: 'shopCheckSH', fs: 'r', to: 'termSH', ts: 'r', label: 'NO',
+    via: [[SH_BYPASS_X, N.shopCheckSH.cy], [SH_BYPASS_X, N.termSH.cy]] },
+  { from: 'shopCheckSH', fs: 'b', to: 'switchJobSH', ts: 't', label: 'YES (ไม่ตรง)' },
+  { from: 'switchJobSH', fs: 'b', to: 'termSH', ts: 't', label: 'สำเร็จ →\nrunShopee()' },
 ];
 
 // ===== Render edges =====
@@ -614,6 +672,9 @@ for (const e of edges) {
     attrs['marker-end'] = 'url(#arrowOk)';
   } else if (e.style === 'bi') {
     attrs['marker-start'] = 'url(#arrowB)';
+  } else if (e.style === 'loop') {
+    stroke = '#C62828';
+    dash = '6 4';
   }
   attrs.stroke = stroke;
   attrs['stroke-dasharray'] = dash;
@@ -671,6 +732,7 @@ for (const li of legendItems) {
 }
 
 updateBadge();
+
 </script>
 </body>
 </html>
