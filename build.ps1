@@ -54,15 +54,26 @@ Copy-Item dist/launcher.exe "$RELEASE/launcher.exe"
 # zero setup — _default_sumatra_path() in odoo_counter_app.py prefers app/SumatraPDF/SumatraPDF.exe
 # over the C:\Program Files\... fallback whenever it's present.
 $SumatraCandidates = @(
-    "$env:ProgramFiles\SumatraPDF\SumatraPDF.exe",
-    "${env:ProgramFiles(x86)}\SumatraPDF\SumatraPDF.exe",
-    "$env:LOCALAPPDATA\SumatraPDF\SumatraPDF.exe"
+    "$env:ProgramFiles\SumatraPDF",
+    "${env:ProgramFiles(x86)}\SumatraPDF",
+    "$env:LOCALAPPDATA\SumatraPDF"
 )
-$SumatraSrc = $SumatraCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$SumatraSrc = $SumatraCandidates | Where-Object { Test-Path "$_\SumatraPDF.exe" } | Select-Object -First 1
 if ($SumatraSrc) {
     Write-Host "==> bundling SumatraPDF from $SumatraSrc"
     New-Item -ItemType Directory -Path "$RELEASE/app/SumatraPDF" | Out-Null
-    Copy-Item $SumatraSrc "$RELEASE/app/SumatraPDF/SumatraPDF.exe"
+    # SumatraPDF 3.6+ แยก render engine ออกเป็น libmupdf.dll ที่วางคู่กับ exe — ถ้า copy ไปแค่
+    # SumatraPDF.exe ไฟล์เดียว มันจะ exit 0 เงียบ ๆ โดยไม่พิมพ์อะไร (check=True เลยไม่ throw
+    # แอปจึงขึ้น "พิมพ์ใบเสร็จแล้ว" ทั้งที่ไม่มีอะไรออก) — copy .exe + .dll ทั้งโฟลเดอร์แทน
+    Get-ChildItem $SumatraSrc -File |
+        Where-Object { $_.Extension -in '.exe', '.dll' } |
+        Copy-Item -Destination "$RELEASE/app/SumatraPDF/"
+    if (-not (Test-Path "$RELEASE/app/SumatraPDF/libmupdf.dll")) {
+        Write-Host "WARNING: libmupdf.dll not found next to SumatraPDF.exe - test that app\SumatraPDF\SumatraPDF.exe runs on a machine without SumatraPDF installed" -ForegroundColor Yellow
+    }
+    Get-ChildItem "$RELEASE/app/SumatraPDF" -File | ForEach-Object {
+        Write-Host ("    + {0} ({1:N1} MB)" -f $_.Name, ($_.Length / 1MB))
+    }
 } else {
     Write-Host "WARNING: SumatraPDF.exe not found on this machine - invoice auto-print will need it installed on target machines" -ForegroundColor Yellow
 }
