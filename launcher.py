@@ -13,6 +13,7 @@ Layout เมื่อ build เป็น .exe:
 flow: launcher → check GitHub Releases → ถ้ามี version ใหม่ download + replace app/
        → launch app/odoo_counter.exe
 """
+import os
 import shutil
 import ssl
 import subprocess
@@ -89,6 +90,18 @@ def get_local_version() -> str:
         except Exception:
             pass
     return "0.0.0"
+
+
+def app_is_running() -> bool:
+    """Windows ล็อก .exe ที่กำลังรันไว้ไม่ให้เขียนทับ — เปิดไฟล์แบบ append (ไม่เขียนอะไรลงไป)
+    ไม่ผ่าน = แอปยังเปิดอยู่ ถ้าอัปเดตต่อจะลบโฟลเดอร์เดิมได้ไม่หมดแล้วพังทั้งการติดตั้ง"""
+    if not APP_EXE.exists():
+        return False
+    try:
+        with open(APP_EXE, 'ab'):
+            return False
+    except OSError:
+        return True
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -194,6 +207,12 @@ class Launcher:
             self.set_status("ไม่พบไฟล์ zip ใน release")
             return
 
+        # เช็คก่อนดาวน์โหลด ไม่ใช่ก่อนติดตั้ง — จะได้ไม่เสียเวลาโหลด ~1 GB ทิ้ง
+        if app_is_running():
+            self.set_status("ปิดแอปก่อนแล้วเปิด launcher ใหม่เพื่ออัปเดต")
+            log("update skipped: odoo_counter.exe is still running")
+            return
+
         self.set_status(f"พบเวอร์ชันใหม่ {remote} — กำลังดาวน์โหลด...")
         zip_path = self._download(asset['browser_download_url'], asset.get('size', 0))
         self.set_status("กำลังติดตั้ง...")
@@ -226,11 +245,37 @@ class Launcher:
 
         # zip อาจมี root เป็น "app/" หรือ contents ตรง ๆ — รองรับทั้งคู่
         new_app = extract_dir / "app" if (extract_dir / "app").is_dir() else extract_dir
+        if not (new_app / APP_EXE_NAME).exists():
+            raise RuntimeError(f"zip ไม่มี {APP_EXE_NAME}")
 
+        # เศษจากการอัปเดตรอบก่อนที่ลบไม่สำเร็จ (โฟลเดอร์ละ ~3 GB) — เก็บกวาดก่อน
+        for leftover in BASE.glob('app_old_*'):
+            shutil.rmtree(leftover, ignore_errors=True)
+
+        # ย้ายของเดิมออกไปทั้งก้อนแทนที่จะไล่ลบทีละไฟล์: rename เป็น all-or-nothing
+        # ถ้ามีไฟล์ถูกล็อกอยู่มันจะ fail ทันทีโดยที่ของเดิมยังครบ ต่างจาก rmtree ที่ลบไปได้
+        # ครึ่งทางแล้วเงียบ ทำให้ shutil.move ไปซ้อนเป็น app/app/ แล้วเหลือ exe เก่าที่ไส้แหว่ง
+        stale = None
         if APP_DIR.exists():
-            shutil.rmtree(APP_DIR, ignore_errors=True)
-        shutil.move(str(new_app), str(APP_DIR))
+            stale = BASE / f"app_old_{os.getpid()}"
+            try:
+                APP_DIR.rename(stale)
+            except OSError as e:
+                raise RuntimeError(f"ลบเวอร์ชันเดิมไม่ได้ (ปิดแอปก่อน): {e}")
+
+        try:
+            shutil.move(str(new_app), str(APP_DIR))
+        except Exception:
+            if stale is not None and not APP_DIR.exists():
+                stale.rename(APP_DIR)  # กู้ของเดิมกลับมา ดีกว่าปล่อยให้ไม่เหลืออะไรเลย
+            raise
+
+        # เขียนหลังย้ายสำเร็จเท่านั้น — ถ้าเขียนตอนล้มเหลว รอบหน้า launcher จะเห็นว่า
+        # เป็นเวอร์ชันล่าสุดแล้วไม่ยอมโหลดซ้ำ กลายเป็นพังค้างถาวรกู้เองไม่ได้
         (APP_DIR / "version.txt").write_text(version.lstrip('v'), encoding='utf-8')
+
+        if stale is not None:
+            shutil.rmtree(stale, ignore_errors=True)
         shutil.rmtree(TMP_DIR, ignore_errors=True)
 
     def _launch_app(self):
