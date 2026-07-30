@@ -35,6 +35,8 @@ python batch_eval_app.py
 
 There is no test suite, linter, or CI. Verification is manual: run from source, run a batch eval on a small dataset, then test the built `launcher.exe`. If you cannot run the app (needs camera/Odoo/internet/credentials), say so explicitly rather than claiming it works.
 
+The one exception is `python test\test_launcher_install.py` — a standalone regression test for the launcher's update swap that needs no camera, Odoo, or network. Run it after touching `launcher.py`.
+
 All test and demo scripts (mock/offline logic replicas, exploratory `test_*.py` files, demo copies of the userscript, etc.) live under `test/`, not the project root. Put new ones there too.
 
 Key dependencies (no requirements.txt — installed ad hoc): `PyQt6`, `opencv-python` (`cv2`), `numpy`, `ultralytics`, `openvino`, `pynput`, `websockets`, `truststore`, `certifi`, `requests`, `PyInstaller`.
@@ -43,7 +45,7 @@ Key dependencies (no requirements.txt — installed ad hoc): `PyQt6`, `opencv-py
 
 The system has **four cooperating pieces**, not just one app:
 
-1. **`launcher.py`** — a tkinter shell that checks GitHub Releases, downloads the newest `.zip`, replaces the `app/` folder, and launches `app/odoo_counter.exe`. Users run the launcher, never the inner exe. The launcher owns auto-update; SSL uses truststore → certifi → default fallback (matters because exes built on a dev machine often lack the user's CA store).
+1. **`launcher.py`** — a tkinter shell that checks GitHub Releases, downloads the newest `.zip`, swaps the `app/` folder, and launches `app/odoo_counter.exe`. Users run the launcher, never the inner exe. The launcher owns auto-update; SSL uses truststore → certifi → default fallback (matters because exes built on a dev machine often lack the user's CA store). It reads the latest tag from the `releases/latest` redirect rather than `api.github.com`, whose 60-req/hour-per-IP limit is shared by every machine behind the factory's connection. **The launcher never updates itself** — the zip contains only `app/`, so a `launcher.py` fix has to be hand-copied to every machine.
 
 2. **`odoo_counter_app.py`** — the main PyQt6 app. UI thread + several `QThread`/daemon workers communicating via Qt signals:
    - `MainWindow` (barcode scan home) → `CounterPanel` (counting popup)
@@ -63,14 +65,16 @@ The system has **four cooperating pieces**, not just one app:
 - **Inference is gated to save CPU.** `CameraWorker` runs YOLO only while a counting popup is open (`_inference_enabled`); frames aren't even queued otherwise. Scanning a valid barcode enables it; closing the popup disables it.
 - **Counting is crop-filtered.** The model runs on the full preprocessed frame, but only detections whose OBB center falls inside the normalized crop rect are counted. Uploaded images skip the crop (whole image counted).
 - **Save is optimistic/async.** On an exact count: play sound → snapshot → show success toast → auto-hide popup, and only then (in `hideEvent`) post the note to Odoo. A success toast does **not** mean the Odoo post succeeded — errors only print to stdout. Do not move `_save_to_odoo()` back into the synchronous pre-hide flow.
-- **Config precedence:** `crop_config.json` (gitignored, per-machine) overrides `DEFAULT_CONF`/crop defaults in source. A machine that saved settings won't pick up a new source default until the file is edited or re-saved via the gear dialog.
+- **Config precedence:** `%LOCALAPPDATA%\odoo-counter\config.json` (per-machine, outside `app/` since KAN-49) overrides `DEFAULT_CONF`/crop defaults in source, and holds the invoice-print settings too. A machine that saved settings won't pick up a new source default until the file is edited or re-saved via the gear dialog. The old in-app-folder `crop_config.json` is a one-time migration source only — and that migration can't fire on an auto-update, because the launcher moves `app/` (with the legacy file inside) away before the new app ever runs.
 - **Model loading prefers OpenVINO.** Loads `<model>_openvino_model/` if present (faster startup), falls back to the `.pt`. Current model is `ai_3g_v12.pt` / `ai_3g_v12_openvino_model/`.
 
 ## Editing Guardrails
 
 - **Odoo orders now use two formats:** `S\d{4,6}` (legacy, e.g. `S00123`) and `MZS-\d+` (new, e.g. `MZS-240278`) — both route to `runOdoo`. If adding a third format, update `detectPlatform` in `combined-auto-print.user.js` and bump `@version`.
 - **Adding a product or changing the model version touches multiple files in lockstep.** PROJECT_CONTEXT.md has explicit checklists ("Changing Model Version Checklist", "Adding New Product Checklist") — follow them. Product matching is keyword-based across `BarcodeWorker`'s Odoo search domain, `_KEYWORD_ODOO_NAME`, `_OBB_COLORS`, and `_extract_keyword()`; the YOLO class names must contain the matching keyword too.
-- **Don't change the release zip structure.** The launcher expects a root `app/` folder; `release.ps1` zips with `tar -caf <zip> -C dist_release app`. The launcher grabs the *first* `.zip` asset in the latest release.
+- **Don't change the release zip structure or its name.** The launcher expects a root `app/` folder; `release.ps1` zips with `tar -caf <zip> -C dist_release app`. The current launcher builds the download URL from the tag as `odoo-counter-<version>.zip` instead of listing assets, so renaming the artifact 404s every updated machine while older launchers (which took the first `.zip` asset) keep working — a split failure that is painful to diagnose.
+- **The launcher must never empty `app/` in place.** `_install()` renames the old folder aside and only moves the new one in once the target is gone, because `shutil.rmtree(..., ignore_errors=True)` gives up silently on locked files and leaves a gutted `app/` that `shutil.move` then nests into `app/app/`; the leftover old exe launches against a half-deleted `_internal` and, since `version.txt` was already bumped, the machine never retries. `test/test_launcher_install.py` locks the folder and asserts the update aborts cleanly — keep it passing.
+- **Bundling SumatraPDF means the DLLs too.** SumatraPDF 3.6+ keeps its render engine in `libmupdf.dll` beside the exe; shipping the exe alone makes it exit 0 without printing, which `subprocess.run(check=True)` reads as success, so the app claims the invoice printed. `build.ps1` copies every `.exe`/`.dll` from the install dir — check the `==> bundling SumatraPDF from ...` line in the build log.
 - **`version.txt` must be UTF-8 without BOM.** `build.ps1` writes it via .NET `WriteAllText` for this reason (PowerShell 5.1 `Out-File -Encoding utf8` adds a BOM that broke launcher version parsing).
 - **The browser runs the userscript published on `main`, not your working tree.** When debugging userscript behavior, check `git show HEAD:combined-auto-print.user.js` (and `git log`) for the version users actually run — the working copy can diverge (e.g. a local revert). To ship a fix, bump `@version` *above* the published number (Tampermonkey only auto-updates to a higher version), then push to `main`.
   - `push-userscript.ps1` does this in one step (bump `@version` → commit → fetch → rebase → push, scoped to just the userscript file). Note: this helper is currently untracked in git.

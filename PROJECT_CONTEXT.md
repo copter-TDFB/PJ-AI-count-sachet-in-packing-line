@@ -1,6 +1,6 @@
 # Project Context - PJ AI Count Sachet PK
 
-อัปเดตล่าสุด: 2026-06-16
+อัปเดตล่าสุด: 2026-07-30
 
 ไฟล์นี้เป็นเอกสาร onboarding สำหรับคนหรือ AI ที่กลับมาแก้โปรเจกต์นี้ในรอบถัดไป ให้อ่านไฟล์นี้ก่อนเปิดโค้ด เพื่อเข้าใจภาพรวม, logic, จุดเสี่ยง และวิธี build/release โดยไม่ต้องไล่ทั้งโปรเจกต์ตั้งแต่ต้น
 
@@ -29,8 +29,8 @@ Flow ใช้งานจริง:
 - โมเดลหลักปัจจุบัน: `ai_3g_v12.pt`
 - OpenVINO model หลักปัจจุบัน: `ai_3g_v12_openvino_model/`
 - default confidence ใน source: `DEFAULT_CONF = 0.7`
-- ค่าที่อยู่ใน `dist_release/app/version.txt` ปัจจุบัน: `1.2`
-- GitHub Release ล่าสุดบน remote: `v1.1.4` (2026-05-18)
+- ค่าที่อยู่ใน `dist_release/app/version.txt` ปัจจุบัน: `1.7`
+- GitHub Release ล่าสุดบน remote: `v1.7` (2026-07-30) — v1.6 ที่ปล่อยก่อนหน้าในวันเดียวกันมี SumatraPDF ที่ใช้งานไม่ได้ (ขาด `libmupdf.dll`) ให้ถือว่า v1.7 เป็นตัวแรกที่พิมพ์ใบเสร็จได้จริง
 - GitHub repo ที่ launcher เช็ก release: `copter-TDFB/PJ-AI-count-sachet-in-packing-line`
 - Odoo target ปัจจุบัน: production (`https://tdfb.odoo.com`, db `tdfb`) — เคยมี state ชี้ test instance ตอน dev แต่ถูกย้ายกลับ prod แล้ว
 
@@ -153,10 +153,14 @@ Tools สำหรับ build/release:
 
 - แสดงหน้าต่างเล็กด้วย tkinter
 - เช็ก version local จาก `app/version.txt`
-- เรียก GitHub Releases API เพื่อดู release ล่าสุด
+- เช็ก release ล่าสุดผ่าน redirect ของหน้า `releases/latest` (ไม่ใช่ REST API — ดูหัวข้อ Fetch logic)
 - ถ้า remote version ใหม่กว่า local จะ download `.zip`
-- unzip แล้ว replace โฟลเดอร์ `app/`
+- unzip แล้ว swap โฟลเดอร์ `app/` ทั้งก้อน
 - เปิด `app/odoo_counter.exe`
+
+**launcher ไม่เคยอัปเดตตัวเอง** — zip release มีแต่โฟลเดอร์ `app/` ไม่มี `launcher.exe` อยู่ข้างใน
+ดังนั้นทุกครั้งที่แก้ `launcher.py` ต้องเดินเอา `dist_release/launcher.exe` ไปวางทับทุกเครื่องเอง
+release ใหม่อย่างเดียวไม่ทำให้ launcher บนเครื่อง user เปลี่ยน
 
 ค่าคงที่:
 
@@ -181,6 +185,18 @@ SSL logic (`_make_ssl_context()`):
 - context ถูกสร้างครั้งเดียวเป็น `_SSL_CTX` และส่งเข้า `urllib.request.urlopen(..., context=_SSL_CTX)`
 - เหตุผลคือ exe ที่ build บนเครื่อง dev แล้วเอาไปรันบนเครื่อง user มักไม่มี CA store ของระบบ → เจอ `CERTIFICATE_VERIFY_FAILED` ตอน fetch GitHub
 
+Fetch logic (`fetch_latest_release()`):
+
+- **ไม่ได้ใช้ `api.github.com`** — endpoint นั้นจำกัด unauthenticated request ไว้ 60 ครั้ง/ชม.
+  **ต่อ IP** เครื่องในโรงงานที่ออกเน็ตทาง IP เดียวกันจึงโดน `403 rate limit exceeded` กันทั้งวง
+  แล้ว launcher จะขึ้น "ออฟไลน์ — ใช้เวอร์ชันที่ติดตั้งไว้" ทั้งที่เน็ตปกติ
+- ใช้ HEAD ไปที่หน้าเว็บ `https://github.com/<repo>/releases/latest` แล้วอ่าน header `Location`
+  ของ redirect (คนละโควตากับ REST API) — class `_NoRedirect` บล็อกไม่ให้ urllib ตาม redirect เอง
+- tag ได้จากท้าย URL ที่ redirect ไป แล้ว**ประกอบชื่อ asset เองเป็น `odoo-counter-<version>.zip`**
+  → ชื่อ zip ใน release **ต้อง**ตรงสูตรนี้ ไม่งั้นดาวน์โหลด 404 (`release.ps1` ตั้งชื่อให้ถูกอยู่แล้ว)
+- ยิง HEAD ที่ URL ของ asset อีกครั้งเพื่อเอา `Content-Length` ไปคำนวณ progress bar (ถ้าล้มเหลว
+  แค่ไม่มี % แต่ยังดาวน์โหลดได้)
+
 Version logic:
 
 - `get_local_version()` อ่าน `app/version.txt` ด้วย `utf-8-sig` เพื่อรองรับ BOM
@@ -189,22 +205,34 @@ Version logic:
 - remote version มาจาก `release["tag_name"]`
 - update เมื่อ `parse_version(remote) > parse_version(local)`
 
-Download/install logic:
+Download/install logic (`_install()`):
 
-- หา asset แรกที่ชื่อจบด้วย `.zip`
-- download เป็น `update_tmp/update.zip`
-- progress bar คำนวณจาก asset size ถ้ามี
-- extract ไป `update_tmp/extracted`
-- ถ้าใน zip มี root `app/` จะใช้ folder นั้น
-- ถ้าไม่มี `app/` จะถือว่า content ใน zip คือ app payload โดยตรง
-- ก่อน replace จะย้าย app เก่าไป `app_backup`
-- หลังย้าย app ใหม่ จะเขียน `app/version.txt` เป็น remote version แบบไม่มี `v`
-- ลบ `update_tmp`
+- ก่อนดาวน์โหลด เช็ก `app_is_running()` — ลองเปิด `app/odoo_counter.exe` แบบ append (ไม่เขียนอะไร);
+  ถ้าเปิดไม่ได้แปลว่า Windows ล็อกไฟล์อยู่ = แอปยังเปิดค้าง → ขึ้นข้อความให้ปิดแอปก่อน แล้ว
+  **ไม่แตะอะไรเลย** (เช็กก่อนโหลด ไม่ใช่ก่อนติดตั้ง จะได้ไม่เสียเวลาโหลด ~1 GB ทิ้ง)
+- download เป็น `update_tmp/update.zip`, extract ไป `update_tmp/extracted`
+- ถ้าใน zip มี root `app/` จะใช้ folder นั้น ถ้าไม่มีถือว่า content คือ app payload โดยตรง
+- ตรวจว่า payload มี `odoo_counter.exe` จริง ไม่งั้น raise ทิ้งตั้งแต่ยังไม่แตะของเดิม
+- กวาดเศษ `app_old_*` จากรอบก่อนทิ้ง (ก้อนละ ~3 GB)
+- **swap ไม่ใช่ลบ**: `APP_DIR.rename(BASE/f"app_old_{pid}")` ย้ายของเดิมออกทั้งก้อน — rename เป็น
+  all-or-nothing ถ้าโฟลเดอร์ถูกล็อกจะ fail ทันทีโดยของเดิมยังครบ ใช้งานต่อได้
+- `shutil.move` ของใหม่เข้ามาเมื่อปลายทางว่างจริงแล้วเท่านั้น ถ้า move พังจะ rename ของเดิมกลับ
+- เขียน `app/version.txt` **หลัง** swap สำเร็จเท่านั้น แล้วค่อย `rmtree` ทั้ง `app_old_*` และ `update_tmp`
+
+> **ห้ามเปลี่ยนกลับไปเป็น `shutil.rmtree(APP_DIR, ignore_errors=True)` แล้ว `shutil.move` ทับ**
+> rmtree ลบจากล่างขึ้นบน พอเจอไฟล์ถูกล็อก (แอปเปิดค้าง) จะเลิกกลางคันแบบเงียบ ๆ เหลือ `app/`
+> ที่ไส้แหว่ง → `shutil.move` เห็นปลายทางยังอยู่เลยย้ายซ้อนเป็น `app/app/` → launcher เปิด exe เก่า
+> ที่ `_internal` ขาดไฟล์ ได้ `[Errno 2] No such file or directory: ...\_internal\...\Lorem ipsum.txt`
+> และเพราะ `version.txt` ถูกเขียนไปแล้ว รอบหน้า launcher จะเห็นว่า "ล่าสุดแล้ว" ไม่โหลดซ้ำ =
+> พังค้างถาวรจนกว่าคนจะไปลบ `app/` เอง (เกิดจริงที่เครื่อง user 2026-07-30)
+> เทสต์กันการถอยหลังอยู่ที่ `test/test_launcher_install.py`
 
 Failure behavior:
 
 - ถ้า fetch GitHub release fail จะ set status offline แล้วใช้ local app ต่อ
-- ถ้า update fail จะ log ลง `launcher.log` แล้วพยายามเปิด local app ต่อ
+- ถ้า update fail จะ log ลง `launcher.log` แล้วพยายามเปิด local app ต่อ — ของเดิมยังครบเสมอ
+  เพราะ swap ไม่เคยลบของเดิมก่อนย้ายของใหม่สำเร็จ
+- `version.txt` ไม่ถูกแตะเมื่อ update fail → รอบหน้า launcher จะลองใหม่เอง (กู้ตัวเองได้)
 - ถ้าไม่พบ `app/odoo_counter.exe` จะแสดง error แล้วปิด
 
 ## Main App Overview (`odoo_counter_app.py`)
@@ -242,10 +270,16 @@ Base path logic:
 %LOCALAPPDATA%\odoo-counter\config.json
 ```
 
-อยู่นอกโฟลเดอร์ `app/` โดยตั้งใจ — launcher auto-update ทำ `shutil.rmtree(APP_DIR)` แล้วสร้าง
-`app/` ใหม่ทุกครั้งที่มี release ใหม่ (`launcher.py` `_install()`) ก่อน KAN-49 ไฟล์ config
-(`crop_config.json`) อยู่ใน `app/` เดียวกัน เลยถูกลบทิ้งทุกครั้งที่ auto-update; ย้ายออกมาไว้ที่
+อยู่นอกโฟลเดอร์ `app/` โดยตั้งใจ — launcher auto-update ย้ายโฟลเดอร์ `app/` เดิมออกทั้งก้อนแล้ว
+วางของใหม่แทนทุกครั้งที่มี release ใหม่ (`launcher.py` `_install()`) ก่อน KAN-49 ไฟล์ config
+(`crop_config.json`) อยู่ใน `app/` เดียวกัน เลยหายไปทุกครั้งที่ auto-update; ย้ายออกมาไว้ที่
 `%LOCALAPPDATA%` แก้ปัญหานี้เพราะ path นี้ไม่เกี่ยวกับ `app/` เลย
+
+⚠️ migration อัตโนมัติ **ไม่ครอบคลุมเครื่องที่อัปเดตข้ามจากเวอร์ชันก่อน KAN-49** — ลำดับเวลาคือ
+launcher ย้าย `app/` (พร้อม `crop_config.json` ข้างใน) ออกไปก่อน แล้วแอปใหม่ถึงจะได้รัน
+`_load_config_dict()` ตอนนั้น legacy source หายไปแล้ว จึงได้ `{}` = กลับไปใช้ค่า default
+ถ้าจะรักษาค่า crop ของเครื่องเดิมต้อง copy `app\crop_config.json` ไปเป็น
+`%LOCALAPPDATA%\odoo-counter\config.json` **ด้วยมือก่อน**ปล่อยให้เครื่องนั้นอัปเดต
 
 Legacy location (pre-KAN-49): `crop_config.json` ใน `_get_base_dir()` เดิม (โฟลเดอร์ของ exe
 ตอน frozen หรือโฟลเดอร์ script ตอน run จาก source) — ฟังก์ชัน `_crop_config_path()` ยังอยู่ใน
@@ -421,9 +455,13 @@ Logic ใน `run()`:
 
 Signal: `print_status(level, message)` โดย `level` เป็น `'ok'|'checking'|'warn'` — `MainWindow._on_invoice_print_status` เอาไปแสดงใน `lbl_status` เดียวกับ barcode/camera/Odoo status (สีเขียว/เทา/แดงอ่อน)
 
-Config keys ใหม่ใน `crop_config.json` (อ่านผ่าน `_load_invoice_config()`): `invoice_printer_name` (default `""` — ตั้งใจไม่มี fallback), `invoice_report_id` (default `1204`, ต้องยืนยันกับ production ก่อนใช้จริง), `invoice_sumatra_path`, `invoice_need_bill_field`, `invoice_need_bill_value`. Settings UI มีแล้ว (T4/KAN-50) — ตั้งค่า printer ผ่าน dropdown ในหน้าตั้งค่าเฟือง (`CropSettingsDialog`) แทนการแก้ไฟล์ JSON เอง; บันทึกผ่าน `_save_invoice_printer()` (merge-based เหมือน `_save_settings()`).
+Config keys (อ่านผ่าน `_load_invoice_config()` จาก `%LOCALAPPDATA%\odoo-counter\config.json`): `invoice_printer_name` (default `""` — ตั้งใจไม่มี fallback), `invoice_auto_print_enabled` (default `True`, KAN-125), `invoice_report_id` (default `1204`, ต้องยืนยันกับ production ก่อนใช้จริง), `invoice_sumatra_path`, `invoice_need_bill_field`, `invoice_need_bill_value`. Settings UI มีแล้ว (T4/KAN-50) — ตั้งค่า printer ผ่าน dropdown ในหน้าตั้งค่าเฟือง (`CropSettingsDialog`) แทนการแก้ไฟล์ JSON เอง; บันทึกผ่าน `_save_invoice_printer()` / `_save_invoice_auto_print()` (merge-based เหมือน `_save_settings()`).
 
-Scope: นี่คือ walking skeleton (T1/KAN-47) เท่านั้น — SumatraPDF ยังรันจาก local install (bundling เป็น T2/KAN-48), config ยังอยู่ใน `crop_config.json` เดิม (ย้ายไป `%LOCALAPPDATA%` เป็น T3/KAN-49), ยังไม่มี idempotency/dedupe กันสแกนซ้ำ (T5/KAN-51).
+**Kill switch (KAN-125):** checkbox "เปิดใช้งานพิมพ์ใบเสร็จอัตโนมัติ" ในหน้าตั้งค่าเฟือง จุดตัดอยู่ที่ `MainWindow._on_invoice_job_ready()` — ถ้าปิดไว้จะ `return` ตั้งแต่ต้นทาง job ไม่เข้า `_invoice_queue` เลย (ไม่ต่อ Odoo, ไม่โหลด PDF, ไม่เรียก SumatraPDF) ส่วนการนับซองและ post note กลับ Odoo ยังทำงานปกติ — ใช้ตอนเครื่องพิมพ์เสีย/กระดาษหมด/ยังไม่อยากให้พิมพ์จริง
+
+**SumatraPDF path (KAN-48):** `_default_sumatra_path()` คืน `<base_dir>/SumatraPDF/SumatraPDF.exe` ถ้ามีไฟล์อยู่ ไม่งั้น fallback `C:\Program Files\SumatraPDF\SumatraPDF.exe` — คำนวณใหม่ทุกครั้งที่เรียก (ไม่ cache) จึงตามโฟลเดอร์แอปไปเองไม่ว่าจะติดตั้งไว้ที่ไหนหรือย้ายที่ ค่านี้จะถูก override ก็ต่อเมื่อมี `invoice_sumatra_path` เป็น string ไม่ว่างใน config — ไม่มี UI ตัวไหนเขียน key นี้ ถ้ามีแปลว่ามีคนแก้ JSON เอง และเพราะ config อยู่นอก `app/` มันจะรอดทุกการอัปเดต (ถ้า path นั้นผิดจะพิมพ์ไม่ออกถาวร)
+
+Scope: T1/KAN-47 (skeleton), T2/KAN-48 (bundle SumatraPDF), T3/KAN-49 (config ย้ายไป `%LOCALAPPDATA%`), T4/KAN-50 (printer picker + test print), KAN-125 (kill switch) ทำครบแล้ว — ที่ยังไม่มีคือ idempotency/dedupe กันสแกนซ้ำ (T5/KAN-51)
 
 ### `OdooStatusWorker`
 
@@ -1101,7 +1139,17 @@ Steps:
 8. copy `ai_3g_v12_openvino_model/` ถ้ามี (ถ้าไม่มี print warning)
 9. copy `*.mp3`
 10. copy `dist/launcher.exe` ไป `dist_release/launcher.exe`
-11. เขียน `dist_release/app/version.txt` ด้วย `[System.IO.File]::WriteAllText` + `UTF8Encoding $false` → UTF-8 no BOM
+11. bundle SumatraPDF (KAN-48): หาโฟลเดอร์ติดตั้งจาก `%ProgramFiles%`, `%ProgramFiles(x86)%`,
+    `%LOCALAPPDATA%` ตัวแรกที่มี `SumatraPDF.exe` แล้ว copy **ทุกไฟล์ `.exe` และ `.dll`** ในนั้น
+    ไป `dist_release/app/SumatraPDF/` พร้อม list ไฟล์ที่ copy ออกมาให้เห็นใน log
+12. เขียน `dist_release/app/version.txt` ด้วย `[System.IO.File]::WriteAllText` + `UTF8Encoding $false` → UTF-8 no BOM
+
+⚠️ **ต้อง copy `.dll` ด้วย ไม่ใช่แค่ `SumatraPDF.exe`** — SumatraPDF 3.6+ แยก render engine ออกไปไว้ใน
+`libmupdf.dll` (~16 MB) ที่วางข้าง exe ถ้า bundle ไปแค่ exe ไฟล์เดียว มันจะ **exit 0 เงียบ ๆ โดยไม่พิมพ์
+อะไรเลย** และเพราะ `subprocess.run(..., check=True)` เห็น exit code 0 เลยไม่ throw แอปจึงขึ้น
+"พิมพ์ใบเสร็จ ... แล้ว" ทั้งที่ไม่มีอะไรออกจากเครื่องพิมพ์ (ปล่อยพลาดไปแล้วใน v1.6 แก้ใน v1.7)
+build.ps1 จะเตือนสีเหลืองถ้าไม่เจอ `libmupdf.dll` — ถ้า build บนเครื่องที่ไม่ได้ลง SumatraPDF จะข้าม
+การ bundle ทั้งหมดแล้ว build ผ่านไปเฉย ๆ ให้ดูบรรทัด `==> bundling SumatraPDF from ...` ทุกครั้ง
 
 เหตุผลที่เขียน version ด้วย .NET API:
 
@@ -1130,8 +1178,15 @@ Steps:
 สำคัญ:
 
 - zip ต้องมี folder `app/` เป็น root
-- launcher download asset `.zip` แรกใน latest release
-- ถ้ามีหลาย zip ใน release ล่าสุด อาจเลือกผิดได้ เพราะ launcher หา asset แรกที่ suffix เป็น `.zip`
+- **ชื่อ asset ต้องเป็น `odoo-counter-<version>.zip` เป๊ะ ๆ** — launcher ตัวปัจจุบันประกอบ URL เอง
+  จาก tag ไม่ได้ไล่หา asset จาก API แล้ว (ตัวเก่าหา asset แรกที่ลงท้าย `.zip`) ถ้าเปลี่ยนสูตรชื่อ
+  เครื่องที่ launcher ใหม่จะโหลด 404 ส่วนเครื่องที่ launcher เก่ายังโหลดได้ — พังไม่พร้อมกัน หาเจอยาก
+- tag ต้องเป็น `v<version>` และ release ต้องเป็น latest (ไม่ใช่ draft/pre-release) เพราะ launcher
+  อ่านจาก redirect ของ `releases/latest`
+- `release.ps1` จะ **build ใหม่เสมอ** (เรียก `build.ps1` เป็นสเต็ปแรก) ไม่ได้อัป zip เดิมที่มีอยู่ —
+  ถ้าอยากปล่อยของที่ build ไว้แล้วโดยไม่ compile ใหม่ (เช่นแก้แค่ไฟล์ที่ copy เข้า release) ให้เติมไฟล์
+  ลง `dist_release/` เอง แก้ `version.txt` แล้ว `tar -caf odoo-counter-<v>.zip -C dist_release app`
+  ตามด้วย `gh release create` — วิธีนี้ใช้ตอนออก v1.7 ประหยัดเวลา PyInstaller ไป ~25 นาที
 
 ## Changing Model Version Checklist
 
@@ -1167,11 +1222,28 @@ Steps:
 
 Launcher เปิดไม่ได้หรือไม่ update:
 
-- ดู `launcher.log`
+- ดู `launcher.log` (บันทึก `local=` / `remote=` ทุกครั้งที่รัน)
 - เช็ก internet และ SSL — ถ้า log บอก `CERTIFICATE_VERIFY_FAILED` ตรวจว่า build ได้ `--hidden-import truststore` และ `--collect-all certifi` หรือไม่
-- เช็ก GitHub Release ล่าสุดว่ามี asset `.zip`
+- เช็ก GitHub Release ล่าสุดว่ามี asset ชื่อ `odoo-counter-<version>.zip` ตรงสูตร
 - เช็กว่า zip มี root `app/`
 - เช็ก `app/version.txt` — ถ้ามี BOM, `get_local_version()` ใช้ `utf-8-sig` แล้ว แต่ `parse_version` ก็ strip `﻿` กันชั้นสองอยู่
+- ถ้าขึ้น "ออฟไลน์ — ใช้เวอร์ชันที่ติดตั้งไว้" ทั้งที่เน็ตปกติ = launcher ตัวเก่าที่ยังยิง `api.github.com` แล้วโดน rate limit ทั้งวง → เอา `launcher.exe` ตัวใหม่ไปวางทับ
+- ถ้าขึ้น "ปิดแอปก่อนแล้วเปิด launcher ใหม่เพื่ออัปเดต" = มี `odoo_counter.exe` ค้างอยู่ ปิดใน Task Manager แล้วเปิด launcher ใหม่
+
+App เปิดแล้วฟ้อง `[Errno 2] No such file or directory: ...\app\_internal\...`:
+
+- อาการนี้แปลว่า **exe ที่ถูกเปิดกับโฟลเดอร์ `_internal` ไม่ใช่ชุดเดียวกัน** ไม่ใช่ปัญหาที่ตัว release
+- เช็กก่อนว่ามี `app\app\` ซ้อนอยู่ไหม (`Test-Path <base>\app\app`) — ถ้ามีคือโดนบั๊ก launcher เก่าที่ลบของเดิมไม่หมด
+- ยืนยันว่า zip ไม่ได้ขาดไฟล์ด้วย `python -c "import zipfile; z=zipfile.ZipFile('odoo-counter-<v>.zip'); print(len([i for i in z.infolist() if not i.is_dir()]), z.testzip())"` — ต้องได้จำนวนไฟล์ตรงกับ `dist_release\app` และ `testzip()` คืน `None`
+- วิธีกู้: ปิดแอป → ลบ `app\` และ `update_tmp\` ทิ้ง → เปิด launcher ใหม่ (จะเห็น `local=0.0.0` แล้วโหลดใหม่ทั้งก้อน)
+- อย่าแค่ลบ `version.txt` เพราะ exe เก่าที่ไส้แหว่งยังอยู่
+
+พิมพ์ใบเสร็จไม่ออก (แต่แอปบอกว่าพิมพ์แล้ว):
+
+- เช็กว่า `app\SumatraPDF\` มี **`libmupdf.dll`** ไม่ใช่แค่ `SumatraPDF.exe` — ถ้าขาด DLL ตัวนี้ SumatraPDF จะ exit 0 โดยไม่ทำอะไร แล้วแอปจะรายงานว่าสำเร็จ (v1.6 เป็นแบบนี้)
+- ทดสอบตรง ๆ: `Start-Process app\SumatraPDF\SumatraPDF.exe -ArgumentList '-print-to','___nope___','-silent','x.pdf' -PassThru -Wait` แล้วดู `ExitCode` — ได้ `1` = ทำงานได้, ได้ `0` = bundle พัง
+- เช็ก `invoice_sumatra_path` ใน `%LOCALAPPDATA%\odoo-counter\config.json` ว่ามีค่าค้างที่ชี้ผิดที่หรือเปล่า (ถ้าไม่มี key นี้ = ใช้ตัว bundled ถูกต้องแล้ว)
+- เช็ก checkbox "เปิดใช้งานพิมพ์ใบเสร็จอัตโนมัติ" (KAN-125) ว่ายังติ๊กอยู่
 
 App เปิดแล้วหา model ไม่เจอ:
 
@@ -1232,17 +1304,20 @@ Batch evaluator ไม่มี accuracy:
 
 ## Git And Working Tree Notes
 
-ตอนสำรวจวันที่ 2026-05-30 worktree มีไฟล์ที่แก้หรือ untracked อยู่:
+(หัวข้อนี้เคยบันทึกสภาพ worktree ตอน 2026-05-30 ที่โค้ดส่วนใหญ่ยังไม่ commit — สถานการณ์นั้นจบไปแล้ว)
 
-- modified: `batch_eval_app.py`, `build.ps1`, `launcher.py`, `odoo_counter_app.py`
-- untracked: `AGENTS.md`, `PROJECT_CONTEXT.md`, `ai_3g_v9.pt`, `ai_3g_v10.pt`, `ai_3g_v11.pt`, `ai_3g_v12.pt`, `สูตร upload เข้า githup.txt`
+ตั้งแต่ราวเดือน ก.ค. 2026 งานเดินผ่าน PR ต่อ ticket (`ai/KAN-xx-*` → PR → merge เข้า `main`)
+worktree ปกติจะสะอาด ก่อนเริ่มงานใหม่ให้ดูของจริงเสมอ อย่าเชื่อรายการในเอกสาร:
 
-Commit history:
+```powershell
+git status --short
+git log --oneline -10
+gh release list --limit 5
+```
 
-- `89da592 feat: counting zone crop, conf threshold, persistent alert`
-- `ff3844d initial commit`
-
-→ การเปลี่ยนแปลงส่วนใหญ่ใน working tree ปัจจุบัน (lot/exp lookup, OdooStatusWorker, snapshot, shake, warmup, VK-map, OpenVINO v12, SSL launcher) **ยังไม่ commit** แต่ release v1.1.x ที่ขึ้น GitHub Release แล้วน่าจะ build จาก state นี้ — ก่อนแก้ไฟล์เหล่านี้ระวังว่าจะกระทบ release ที่ user ใช้อยู่
+ของใหญ่ที่กองอยู่ใน repo root และ **ห้าม commit**: `*.pt` (~20-40 MB/ไฟล์),
+`odoo-counter-*.zip` (~950 MB/ไฟล์), `*_openvino_model/`, `dist_release/` — ทั้งหมด gitignore ไว้แล้ว
+ยกเว้น `snapshots/` ที่ **ไม่ได้** ignore อย่า `git add -A` ลอย ๆ
 
 ข้อควรทำ:
 
@@ -1272,6 +1347,9 @@ Commit history:
   KAN-49) ใช้เป็น one-time migration source เท่านั้น — ค่า config จริงตอนนี้อยู่ที่
   `%LOCALAPPDATA%\odoo-counter\config.json` ซึ่งอยู่นอก repo อยู่แล้วโดยธรรมชาติ (ไม่ต้อง
   ignore เพิ่ม)
+- `app_backup/` เป็นของตกค้างจาก install strategy รุ่นเก่า โค้ดปัจจุบันไม่สร้างโฟลเดอร์นี้แล้ว —
+  ตัวที่ launcher สร้างจริงคือ `app_old_<pid>` (ชั่วคราว ลบทิ้งเองหลัง swap สำเร็จ) และมันเกิดใน
+  โฟลเดอร์ที่ติดตั้งจริงบนเครื่อง user ไม่ใช่ใน repo
 - ถึง ignore `*_openvino_model/` แต่ build ต้องใช้ folder นี้ถ้าต้องการ bundle OpenVINO pre-exported
 - โฟลเดอร์ `snapshots/` **ไม่ได้** ถูก ignore — ถ้ารัน source mode ในโปรเจกต์ root โฟลเดอร์นี้จะถูกสร้างขึ้นและอาจหลุดเข้า git ตอน add ทั้งหมด
 
@@ -1305,6 +1383,9 @@ Commit history:
 
 - `Launcher` - UI + update + launch app
 - `_make_ssl_context()` - truststore → certifi → default
+- `fetch_latest_release()` - อ่าน tag จาก redirect ของ `releases/latest` (เลี่ยง rate limit ของ API)
+- `app_is_running()` - เช็กว่า exe ถูกล็อกอยู่ไหม ก่อนตัดสินใจอัปเดต
+- `Launcher._install()` - swap โฟลเดอร์แบบ rename-aside (ดูคำเตือนในหัวข้อ Launcher Logic)
 
 `odoo_counter_app.py`
 
