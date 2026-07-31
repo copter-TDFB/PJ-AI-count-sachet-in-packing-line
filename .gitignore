@@ -26,3 +26,6 @@ manual-html-preview.png
 
 # Claude Code local state (task worktrees, session config)
 .claude/
+
+# pm-bridge task worktrees left in-tree by an older run or created by hand
+.worktrees/
