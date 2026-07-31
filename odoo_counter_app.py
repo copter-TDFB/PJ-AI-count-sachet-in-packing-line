@@ -353,16 +353,35 @@ class BarcodeWorker(QThread):
                     self.not_found.emit(f"{picking['name']} — ไม่มี moves ที่ยังไม่เสร็จในใบนี้เลย")
                 return
 
-            # ดึงเลข lot + วันหมดอายุ จาก stock.move.line — แยกตาม product
+            # ดึงเลข lot + วันหมดอายุ + จำนวนต่อ lot จาก stock.move.line — แยกตาม product
             move_ids = [m['id'] for m in moves]
             lots_by_product: dict = {}
+            qty_field = ''
             try:
-                move_lines = models.execute_kw(
-                    ODOO_DB, uid, ODOO_PASSWORD,
-                    'stock.move.line', 'search_read',
-                    [[['move_id', 'in', move_ids]]],
-                    {'fields': ['product_id', 'lot_id', 'lot_name']}
-                )
+                # ชื่อ field จำนวนบน stock.move.line ต่างกันตาม Odoo version
+                # (17/18 = quantity, 16 = reserved_uom_qty, 15 = product_uom_qty)
+                # จึงไล่ลองทีละตัวแบบเดียวกับ probe ของ stock.lot ด้านล่าง
+                # candidate ตัวสุดท้ายคือ field list เดิมที่ไม่มีจำนวน — กันกรณีชื่อ field
+                # ผิดแล้ว search_read raise จนโดน except ด้านล่างกลืน แล้ว Lot/EXP
+                # หายทั้งการ์ดโดยไม่มี error โผล่ที่ไหนเลย
+                move_lines = []
+                for qty_cand in ('quantity', 'reserved_uom_qty', 'product_uom_qty', ''):
+                    ml_fields = ['product_id', 'lot_id', 'lot_name']
+                    if qty_cand:
+                        ml_fields.append(qty_cand)
+                    try:
+                        move_lines = models.execute_kw(
+                            ODOO_DB, uid, ODOO_PASSWORD,
+                            'stock.move.line', 'search_read',
+                            [[['move_id', 'in', move_ids]]],
+                            {'fields': ml_fields}
+                        )
+                        qty_field = qty_cand
+                        break
+                    # มีเฉพาะ Fault เท่านั้นที่หมายถึง Odoo version นี้ไม่มี field นี้;
+                    # network error ต้องหลุดไป outer handler แทนการ retry อีกสามรอบ
+                    except xmlrpc.client.Fault:
+                        continue
 
                 # รวบรวม lot_id ทั้งหมดเพื่อดึง expiration_date ทีเดียว
                 lot_ids = list({ml['lot_id'][0] for ml in move_lines if ml.get('lot_id')})
@@ -399,9 +418,18 @@ class BarcodeWorker(QThread):
                         exp  = ''
                     if not name:
                         continue
+                    # qty = None หมายถึง probe ไม่เจอ field จำนวนเลย → การ์ดจะโชว์แค่
+                    # lot + exp เหมือนเดิม ไม่โชว์เลข และไม่โชว์แถว "ยังไม่ระบุ lot"
+                    qty = None
+                    if qty_field:
+                        qty = ml.get(qty_field) or 0
                     bucket = lots_by_product.setdefault(pid, [])
-                    if not any(b['name'] == name for b in bucket):
-                        bucket.append({'name': name, 'expiration_date': exp})
+                    # lot เดียวกันอยู่ได้หลาย move line → บวกจำนวนรวมกันเป็นแถวเดียว
+                    existing = next((b for b in bucket if b['name'] == name), None)
+                    if existing is None:
+                        bucket.append({'name': name, 'expiration_date': exp, 'qty': qty})
+                    elif qty is not None:
+                        existing['qty'] = (existing['qty'] or 0) + qty
             except Exception:
                 pass  # ไม่มี lot ก็ไม่เป็นไร ให้ดำเนินการต่อ
 
@@ -1739,26 +1767,50 @@ class CounterPanel(QWidget):
 
         cl.addLayout(row)
 
-        if lots:
-            lot_names = ', '.join(lot['name'] for lot in lots)
-            exp_dates = []
-            for lot in lots:
-                exp = (lot.get('expiration_date') or '').strip()
-                ymd = exp.split(' ')[0] if exp else ''
-                if ymd and ymd.count('-') == 2:
-                    y, mo, d = ymd.split('-')
-                    exp_dates.append(f"{d}/{mo}/{y}")
-            exp_text = ', '.join(exp_dates) if exp_dates else ''
-        else:
-            lot_names = '-'
-            exp_text = ''
+        # สร้างรายการแถวก่อน (ข้อความซ้าย, ข้อความ EXP, จำนวนหรือ None) แล้วค่อย render
+        lot_rows: list = []
+        for lot in lots or []:
+            exp = (lot.get('expiration_date') or '').strip()
+            ymd = exp.split(' ')[0] if exp else ''
+            if ymd and ymd.count('-') == 2:
+                y, mo, d = ymd.split('-')
+                exp_text = f"EXP {d}/{mo}/{y}"
+            else:
+                exp_text = ''
+            lot_rows.append((f"Lot: {lot['name']}", exp_text, lot.get('qty')))
 
-        lbl_lot = QLabel(
-            f"Lot: {lot_names}    EXP: {exp_text}" if exp_text else f"Lot: {lot_names}"
-        )
-        lbl_lot.setStyleSheet("font-size:13px; color:#80CBC4; font-weight:bold;")
-        lbl_lot.setWordWrap(True)
-        cl.addWidget(lbl_lot)
+        if not lot_rows:
+            lot_rows.append(('Lot: -', '', None))
+        else:
+            # ถ้าผลรวมต่อ lot ยังไม่ถึง demand บนหัวการ์ด เติมส่วนต่างเป็นแถวท้าย
+            # เพื่อให้แถว lot รวมกันตรงกับหัวการ์ดเสมอ — ส่วนต่างเกิดได้จาก Odoo
+            # จองของไม่ครบ, ยังไม่ assign lot, หรือมีคนกดหยิบค้างไว้ใน Odoo
+            qtys = [q for _, _, q in lot_rows if q is not None]
+            if len(qtys) == len(lot_rows):
+                missing = int(demand) - int(sum(qtys))
+                if missing > 0:
+                    lot_rows.append(('ยังไม่ระบุ lot', '', missing))
+
+        lot_style  = "font-size:13px; color:#80CBC4; font-weight:bold;"
+        for left_text, exp_text, qty in lot_rows:
+            lot_row = QHBoxLayout()
+            lot_row.setSpacing(8)
+
+            lbl_lot_name = QLabel(left_text)
+            lbl_lot_name.setStyleSheet(lot_style)
+            lot_row.addWidget(lbl_lot_name)
+
+            lbl_lot_exp = QLabel(exp_text)
+            lbl_lot_exp.setStyleSheet(lot_style)
+            lot_row.addWidget(lbl_lot_exp)
+
+            lot_row.addStretch(1)
+
+            lbl_lot_qty = QLabel('' if qty is None else str(int(qty)))
+            lbl_lot_qty.setStyleSheet(lot_style)
+            lot_row.addWidget(lbl_lot_qty)
+
+            cl.addLayout(lot_row)
 
         return card, lbl_count, lbl_status
 
@@ -1840,7 +1892,14 @@ class CounterPanel(QWidget):
         spacing = self._cards_layout.spacing() * (slots - 1)
         card_h = max(96, (vp_h - spacing) // slots)
         for pr in self._product_rows:
-            pr['card'].setFixedHeight(card_h)
+            # การ์ดที่มี lot หลายแถวต้องสูงพอสำหรับทุกแถว ไม่งั้นแถวท้าย ๆ ถูก clip
+            # (setFixedHeight ทับ setMinimumHeight ของการ์ด การ์ดจึงโตเองไม่ได้)
+            # ใช้ sizeHint ของ layout ตรง ๆ เพราะมันวัดจาก font metrics จริง
+            # ไม่ใช่ค่าคงที่ที่เดาไว้ แล้วปล่อยให้ scroll area ด้านนอกจัดการส่วนที่
+            # เกิน viewport — วัดแล้วว่า lot ตั้งแต่ 2 แถวขึ้นไป การ์ด 96px ไม่พอ
+            # แม้ย่อ font ถึงขั้นต่ำ จึงไม่ย่อ font เลย ให้อ่านง่ายไว้ (KAN-128)
+            need_h = pr['card'].layout().sizeHint().height()
+            pr['card'].setFixedHeight(max(card_h, need_h))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
