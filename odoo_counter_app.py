@@ -378,7 +378,9 @@ class BarcodeWorker(QThread):
                         )
                         qty_field = qty_cand
                         break
-                    except Exception:
+                    # มีเฉพาะ Fault เท่านั้นที่หมายถึง Odoo version นี้ไม่มี field นี้;
+                    # network error ต้องหลุดไป outer handler แทนการ retry อีกสามรอบ
+                    except xmlrpc.client.Fault:
                         continue
 
                 # รวบรวม lot_id ทั้งหมดเพื่อดึง expiration_date ทีเดียว
@@ -1286,7 +1288,7 @@ class CropSettingsDialog(QDialog):
 _CARD_HEADER_H = 76
 _LOT_FONT_MAX  = 13
 _LOT_FONT_MIN  = 9
-_LOT_ROW_PAD   = 3   # ระยะที่บวกเพิ่มจากขนาด font เพื่อประมาณความสูงต่อแถว
+_LOT_ROW_PAD   = 5   # ชดเชย Qt line height ที่สูงกว่า font และ spacing ระหว่างแถว 1px
 
 
 # ── หน้าต่างนับ (เด้งขึ้นเมื่อเจอ Excellent/Houjicha 3g) ────
@@ -1919,7 +1921,7 @@ class CounterPanel(QWidget):
                     lbl.setStyleSheet(
                         f"font-size:{size}px; color:#80CBC4; font-weight:bold;"
                     )
-            need_h = _CARD_HEADER_H + n_rows * (size + _LOT_ROW_PAD)
+            need_h = _CARD_HEADER_H + n_rows * (size + _LOT_ROW_PAD) + (n_rows - 1)
             pr['card'].setFixedHeight(max(card_h, need_h))
 
     def resizeEvent(self, event):
