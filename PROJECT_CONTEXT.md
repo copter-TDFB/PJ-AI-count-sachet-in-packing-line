@@ -870,7 +870,7 @@ Card building:
   - status badge
   - Lot rows (สีเขียวมิ้นต์) — หนึ่งแถวต่อหนึ่ง lot แสดง `Lot: <name>`, `EXP dd/MM/yyyy`, และจำนวนของ lot นั้นชิดขวา; ถ้าไม่มี lot แสดง `Lot: -`; ถ้า probe ไม่เจอ field จำนวนจะแสดงแค่ lot + EXP
   - ถ้าผลรวมจำนวนต่อ lot ยังไม่ถึง demand บนหัวการ์ด จะมีแถวท้าย `ยังไม่ระบุ lot` โชว์ส่วนต่าง เพื่อให้แถว lot รวมกันตรงกับหัวการ์ดเสมอ (ส่วนต่างเกิดจาก Odoo จองไม่ครบ / ยังไม่ assign lot / มีคนกดหยิบค้างไว้)
-  - ความสูงการ์ดคงเดิม แต่ font แถว lot ถูกย่อให้พอดี (13px → ต่ำสุด 9px) ใน `_fit_cards_to_viewport()`; ถ้า 9px ยังไม่พอค่อยขยายการ์ด
+  - font แถว lot คงที่ 13px ไม่ย่อ — `_fit_cards_to_viewport()` ตั้งความสูงการ์ดเป็น `max(card_h, layout().sizeHint().height())` คือขยายการ์ดตาม content จริงที่วัดจาก font metrics แล้วให้ scroll area ด้านนอกรับส่วนที่เกิน (วัดแล้วว่า lot 2 แถวขึ้นไป การ์ด 96px ไม่พอแม้ย่อ font ถึง 9px การย่อ font จึงไม่ช่วยอะไร)
 - `_fit_cards_to_viewport()` พยายาม fit card 5 slots ใน scroll viewport (ปรับ fixed height ตามขนาด viewport)
 - `_cards_scroll` ถูก set `HorizontalScrollBarPolicy = ScrollBarAlwaysOff` ป้องกัน scroll แนวนอน
 
@@ -1299,7 +1299,7 @@ Lot/EXP ไม่ขึ้น:
 - บางใบใน Odoo ยังไม่ assign lot → `stock.move.line` ไม่มี `lot_id` หรือ `lot_name` → card จะแสดง `Lot: -`
 - lot ขึ้นแต่ไม่มีเลขจำนวน → probe หา field จำนวนบน `stock.move.line` ไม่เจอ (ดู Step 3) — lot + EXP ยังแสดงปกติ
 - เห็นแถว `ยังไม่ระบุ lot` → ปกติ ไม่ใช่บั๊ก: ผลรวมจำนวนต่อ lot ยังไม่ถึง demand บนหัวการ์ด
-- lot แถวท้าย ๆ ไม่ขึ้นทั้งที่ Odoo มีหลาย lot → ปัญหาความสูงการ์ด ไม่ใช่ข้อมูล: `_fit_cards_to_viewport()` ต้องย่อ font และ `max(card_h, need_h)` ไม่ใช่ `card_h` เฉย ๆ (KAN-128)
+- lot แถวท้าย ๆ ไม่ขึ้นทั้งที่ Odoo มีหลาย lot → ปัญหาความสูงการ์ด ไม่ใช่ข้อมูล: `_fit_cards_to_viewport()` ต้องใช้ `max(card_h, layout().sizeHint().height())` ไม่ใช่ `card_h` เฉย ๆ (KAN-128)
 - ถ้า Odoo เป็นรุ่นเก่ามาก code ลอง `stock.lot` ก่อน fallback `stock.production.lot` — ถ้า model ทั้งสองไม่มี exp จะเป็น string ว่าง
 
 Batch evaluator ไม่มี accuracy:

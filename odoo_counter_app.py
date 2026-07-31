@@ -1280,17 +1280,6 @@ class CropSettingsDialog(QDialog):
                 pdf_path.unlink(missing_ok=True)
 
 
-# แถว lot บนการ์ดนับ (KAN-128) — ย่อ font ให้พอดีความสูงการ์ดเดิมก่อนที่จะขยายการ์ด
-# _CARD_HEADER_H = ส่วนของการ์ดที่ไม่ใช่แถว lot: margins 12 + ชื่อสินค้า ~18 +
-# แถว counted/demand ~46 (ตัวเลข counted ถูก _apply_counts เปลี่ยนเป็น font 34px
-# หลัง count ครั้งแรก จึงคิดที่ขนาดใหญ่สุด) — การ์ดที่ความสูงขั้นต่ำ 96px
-# จึงเหลือที่ให้แถว lot ราว 20px เท่านั้น
-_CARD_HEADER_H = 76
-_LOT_FONT_MAX  = 13
-_LOT_FONT_MIN  = 9
-_LOT_ROW_PAD   = 5   # ชดเชย Qt line height ที่สูงกว่า font และ spacing ระหว่างแถว 1px
-
-
 # ── หน้าต่างนับ (เด้งขึ้นเมื่อเจอ Excellent/Houjicha 3g) ────
 class CounterPanel(QWidget):
     closed                 = pyqtSignal()
@@ -1722,9 +1711,7 @@ class CounterPanel(QWidget):
             demand  = int(m['product_uom_qty'])
             pid     = m['product_id'][0] if m.get('product_id') else None
             lots    = lots_by_product.get(pid, [])
-            card, lbl_count, lbl_status, lot_labels = self._create_product_card(
-                pname, demand, lots
-            )
+            card, lbl_count, lbl_status = self._create_product_card(pname, demand, lots)
             self._cards_layout.addWidget(card)
             self._product_rows.append({
                 'product_name': pname,
@@ -1733,7 +1720,6 @@ class CounterPanel(QWidget):
                 'card':         card,
                 'lbl_count':    lbl_count,
                 'lbl_status':   lbl_status,
-                'lot_labels':   lot_labels,
             })
         self._cards_layout.addStretch(1)
         QTimer.singleShot(0, self._fit_cards_to_viewport)
@@ -1806,7 +1792,6 @@ class CounterPanel(QWidget):
                     lot_rows.append(('ยังไม่ระบุ lot', '', missing))
 
         lot_style  = "font-size:13px; color:#80CBC4; font-weight:bold;"
-        lot_labels: list = []
         for left_text, exp_text, qty in lot_rows:
             lot_row = QHBoxLayout()
             lot_row.setSpacing(8)
@@ -1826,9 +1811,8 @@ class CounterPanel(QWidget):
             lot_row.addWidget(lbl_lot_qty)
 
             cl.addLayout(lot_row)
-            lot_labels.append((lbl_lot_name, lbl_lot_exp, lbl_lot_qty))
 
-        return card, lbl_count, lbl_status, lot_labels
+        return card, lbl_count, lbl_status
 
     @staticmethod
     def _strip_ref(name: str) -> str:
@@ -1908,20 +1892,13 @@ class CounterPanel(QWidget):
         spacing = self._cards_layout.spacing() * (slots - 1)
         card_h = max(96, (vp_h - spacing) // slots)
         for pr in self._product_rows:
-            # แถว lot: ย่อ font ให้พอดีความสูงการ์ดเดิมก่อน เพราะถ้าขยายการ์ด
-            # product ตัวอื่นจะถูกดันตกจอ — ถ้าย่อถึงขั้นต่ำแล้วยังไม่พอ ค่อยยอม
-            # ให้การ์ดสูงขึ้นเท่าที่จำเป็น ดีกว่า clip แถว lot หายเงียบ ๆ
-            # ซึ่งคือบั๊กเดิมที่ KAN-128 แก้
-            n_rows = max(1, len(pr['lot_labels']))
-            avail  = max(0, card_h - _CARD_HEADER_H)
-            size   = min(_LOT_FONT_MAX,
-                         max(_LOT_FONT_MIN, avail // n_rows - _LOT_ROW_PAD))
-            for row_labels in pr['lot_labels']:
-                for lbl in row_labels:
-                    lbl.setStyleSheet(
-                        f"font-size:{size}px; color:#80CBC4; font-weight:bold;"
-                    )
-            need_h = _CARD_HEADER_H + n_rows * (size + _LOT_ROW_PAD) + (n_rows - 1)
+            # การ์ดที่มี lot หลายแถวต้องสูงพอสำหรับทุกแถว ไม่งั้นแถวท้าย ๆ ถูก clip
+            # (setFixedHeight ทับ setMinimumHeight ของการ์ด การ์ดจึงโตเองไม่ได้)
+            # ใช้ sizeHint ของ layout ตรง ๆ เพราะมันวัดจาก font metrics จริง
+            # ไม่ใช่ค่าคงที่ที่เดาไว้ แล้วปล่อยให้ scroll area ด้านนอกจัดการส่วนที่
+            # เกิน viewport — วัดแล้วว่า lot ตั้งแต่ 2 แถวขึ้นไป การ์ด 96px ไม่พอ
+            # แม้ย่อ font ถึงขั้นต่ำ จึงไม่ย่อ font เลย ให้อ่านง่ายไว้ (KAN-128)
+            need_h = pr['card'].layout().sizeHint().height()
             pr['card'].setFixedHeight(max(card_h, need_h))
 
     def resizeEvent(self, event):
