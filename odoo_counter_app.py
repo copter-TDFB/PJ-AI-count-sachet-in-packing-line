@@ -353,16 +353,33 @@ class BarcodeWorker(QThread):
                     self.not_found.emit(f"{picking['name']} — ไม่มี moves ที่ยังไม่เสร็จในใบนี้เลย")
                 return
 
-            # ดึงเลข lot + วันหมดอายุ จาก stock.move.line — แยกตาม product
+            # ดึงเลข lot + วันหมดอายุ + จำนวนต่อ lot จาก stock.move.line — แยกตาม product
             move_ids = [m['id'] for m in moves]
             lots_by_product: dict = {}
+            qty_field = ''
             try:
-                move_lines = models.execute_kw(
-                    ODOO_DB, uid, ODOO_PASSWORD,
-                    'stock.move.line', 'search_read',
-                    [[['move_id', 'in', move_ids]]],
-                    {'fields': ['product_id', 'lot_id', 'lot_name']}
-                )
+                # ชื่อ field จำนวนบน stock.move.line ต่างกันตาม Odoo version
+                # (17/18 = quantity, 16 = reserved_uom_qty, 15 = product_uom_qty)
+                # จึงไล่ลองทีละตัวแบบเดียวกับ probe ของ stock.lot ด้านล่าง
+                # candidate ตัวสุดท้ายคือ field list เดิมที่ไม่มีจำนวน — กันกรณีชื่อ field
+                # ผิดแล้ว search_read raise จนโดน except ด้านล่างกลืน แล้ว Lot/EXP
+                # หายทั้งการ์ดโดยไม่มี error โผล่ที่ไหนเลย
+                move_lines = []
+                for qty_cand in ('quantity', 'reserved_uom_qty', 'product_uom_qty', ''):
+                    ml_fields = ['product_id', 'lot_id', 'lot_name']
+                    if qty_cand:
+                        ml_fields.append(qty_cand)
+                    try:
+                        move_lines = models.execute_kw(
+                            ODOO_DB, uid, ODOO_PASSWORD,
+                            'stock.move.line', 'search_read',
+                            [[['move_id', 'in', move_ids]]],
+                            {'fields': ml_fields}
+                        )
+                        qty_field = qty_cand
+                        break
+                    except Exception:
+                        continue
 
                 # รวบรวม lot_id ทั้งหมดเพื่อดึง expiration_date ทีเดียว
                 lot_ids = list({ml['lot_id'][0] for ml in move_lines if ml.get('lot_id')})
@@ -399,9 +416,18 @@ class BarcodeWorker(QThread):
                         exp  = ''
                     if not name:
                         continue
+                    # qty = None หมายถึง probe ไม่เจอ field จำนวนเลย → การ์ดจะโชว์แค่
+                    # lot + exp เหมือนเดิม ไม่โชว์เลข และไม่โชว์แถว "ยังไม่ระบุ lot"
+                    qty = None
+                    if qty_field:
+                        qty = ml.get(qty_field) or 0
                     bucket = lots_by_product.setdefault(pid, [])
-                    if not any(b['name'] == name for b in bucket):
-                        bucket.append({'name': name, 'expiration_date': exp})
+                    # lot เดียวกันอยู่ได้หลาย move line → บวกจำนวนรวมกันเป็นแถวเดียว
+                    existing = next((b for b in bucket if b['name'] == name), None)
+                    if existing is None:
+                        bucket.append({'name': name, 'expiration_date': exp, 'qty': qty})
+                    elif qty is not None:
+                        existing['qty'] = (existing['qty'] or 0) + qty
             except Exception:
                 pass  # ไม่มี lot ก็ไม่เป็นไร ให้ดำเนินการต่อ
 
@@ -1252,6 +1278,17 @@ class CropSettingsDialog(QDialog):
                 pdf_path.unlink(missing_ok=True)
 
 
+# แถว lot บนการ์ดนับ (KAN-128) — ย่อ font ให้พอดีความสูงการ์ดเดิมก่อนที่จะขยายการ์ด
+# _CARD_HEADER_H = ส่วนของการ์ดที่ไม่ใช่แถว lot: margins 12 + ชื่อสินค้า ~18 +
+# แถว counted/demand ~46 (ตัวเลข counted ถูก _apply_counts เปลี่ยนเป็น font 34px
+# หลัง count ครั้งแรก จึงคิดที่ขนาดใหญ่สุด) — การ์ดที่ความสูงขั้นต่ำ 96px
+# จึงเหลือที่ให้แถว lot ราว 20px เท่านั้น
+_CARD_HEADER_H = 76
+_LOT_FONT_MAX  = 13
+_LOT_FONT_MIN  = 9
+_LOT_ROW_PAD   = 3   # ระยะที่บวกเพิ่มจากขนาด font เพื่อประมาณความสูงต่อแถว
+
+
 # ── หน้าต่างนับ (เด้งขึ้นเมื่อเจอ Excellent/Houjicha 3g) ────
 class CounterPanel(QWidget):
     closed                 = pyqtSignal()
@@ -1683,7 +1720,9 @@ class CounterPanel(QWidget):
             demand  = int(m['product_uom_qty'])
             pid     = m['product_id'][0] if m.get('product_id') else None
             lots    = lots_by_product.get(pid, [])
-            card, lbl_count, lbl_status = self._create_product_card(pname, demand, lots)
+            card, lbl_count, lbl_status, lot_labels = self._create_product_card(
+                pname, demand, lots
+            )
             self._cards_layout.addWidget(card)
             self._product_rows.append({
                 'product_name': pname,
@@ -1692,6 +1731,7 @@ class CounterPanel(QWidget):
                 'card':         card,
                 'lbl_count':    lbl_count,
                 'lbl_status':   lbl_status,
+                'lot_labels':   lot_labels,
             })
         self._cards_layout.addStretch(1)
         QTimer.singleShot(0, self._fit_cards_to_viewport)
@@ -1739,28 +1779,54 @@ class CounterPanel(QWidget):
 
         cl.addLayout(row)
 
-        if lots:
-            lot_names = ', '.join(lot['name'] for lot in lots)
-            exp_dates = []
-            for lot in lots:
-                exp = (lot.get('expiration_date') or '').strip()
-                ymd = exp.split(' ')[0] if exp else ''
-                if ymd and ymd.count('-') == 2:
-                    y, mo, d = ymd.split('-')
-                    exp_dates.append(f"{d}/{mo}/{y}")
-            exp_text = ', '.join(exp_dates) if exp_dates else ''
+        # สร้างรายการแถวก่อน (ข้อความซ้าย, ข้อความ EXP, จำนวนหรือ None) แล้วค่อย render
+        lot_rows: list = []
+        for lot in lots or []:
+            exp = (lot.get('expiration_date') or '').strip()
+            ymd = exp.split(' ')[0] if exp else ''
+            if ymd and ymd.count('-') == 2:
+                y, mo, d = ymd.split('-')
+                exp_text = f"EXP {d}/{mo}/{y}"
+            else:
+                exp_text = ''
+            lot_rows.append((f"Lot: {lot['name']}", exp_text, lot.get('qty')))
+
+        if not lot_rows:
+            lot_rows.append(('Lot: -', '', None))
         else:
-            lot_names = '-'
-            exp_text = ''
+            # ถ้าผลรวมต่อ lot ยังไม่ถึง demand บนหัวการ์ด เติมส่วนต่างเป็นแถวท้าย
+            # เพื่อให้แถว lot รวมกันตรงกับหัวการ์ดเสมอ — ส่วนต่างเกิดได้จาก Odoo
+            # จองของไม่ครบ, ยังไม่ assign lot, หรือมีคนกดหยิบค้างไว้ใน Odoo
+            qtys = [q for _, _, q in lot_rows if q is not None]
+            if len(qtys) == len(lot_rows):
+                missing = int(demand) - int(sum(qtys))
+                if missing > 0:
+                    lot_rows.append(('ยังไม่ระบุ lot', '', missing))
 
-        lbl_lot = QLabel(
-            f"Lot: {lot_names}    EXP: {exp_text}" if exp_text else f"Lot: {lot_names}"
-        )
-        lbl_lot.setStyleSheet("font-size:13px; color:#80CBC4; font-weight:bold;")
-        lbl_lot.setWordWrap(True)
-        cl.addWidget(lbl_lot)
+        lot_style  = "font-size:13px; color:#80CBC4; font-weight:bold;"
+        lot_labels: list = []
+        for left_text, exp_text, qty in lot_rows:
+            lot_row = QHBoxLayout()
+            lot_row.setSpacing(8)
 
-        return card, lbl_count, lbl_status
+            lbl_lot_name = QLabel(left_text)
+            lbl_lot_name.setStyleSheet(lot_style)
+            lot_row.addWidget(lbl_lot_name)
+
+            lbl_lot_exp = QLabel(exp_text)
+            lbl_lot_exp.setStyleSheet(lot_style)
+            lot_row.addWidget(lbl_lot_exp)
+
+            lot_row.addStretch(1)
+
+            lbl_lot_qty = QLabel('' if qty is None else str(int(qty)))
+            lbl_lot_qty.setStyleSheet(lot_style)
+            lot_row.addWidget(lbl_lot_qty)
+
+            cl.addLayout(lot_row)
+            lot_labels.append((lbl_lot_name, lbl_lot_exp, lbl_lot_qty))
+
+        return card, lbl_count, lbl_status, lot_labels
 
     @staticmethod
     def _strip_ref(name: str) -> str:
@@ -1840,7 +1906,21 @@ class CounterPanel(QWidget):
         spacing = self._cards_layout.spacing() * (slots - 1)
         card_h = max(96, (vp_h - spacing) // slots)
         for pr in self._product_rows:
-            pr['card'].setFixedHeight(card_h)
+            # แถว lot: ย่อ font ให้พอดีความสูงการ์ดเดิมก่อน เพราะถ้าขยายการ์ด
+            # product ตัวอื่นจะถูกดันตกจอ — ถ้าย่อถึงขั้นต่ำแล้วยังไม่พอ ค่อยยอม
+            # ให้การ์ดสูงขึ้นเท่าที่จำเป็น ดีกว่า clip แถว lot หายเงียบ ๆ
+            # ซึ่งคือบั๊กเดิมที่ KAN-128 แก้
+            n_rows = max(1, len(pr['lot_labels']))
+            avail  = max(0, card_h - _CARD_HEADER_H)
+            size   = min(_LOT_FONT_MAX,
+                         max(_LOT_FONT_MIN, avail // n_rows - _LOT_ROW_PAD))
+            for row_labels in pr['lot_labels']:
+                for lbl in row_labels:
+                    lbl.setStyleSheet(
+                        f"font-size:{size}px; color:#80CBC4; font-weight:bold;"
+                    )
+            need_h = _CARD_HEADER_H + n_rows * (size + _LOT_ROW_PAD)
+            pr['card'].setFixedHeight(max(card_h, need_h))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
