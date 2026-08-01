@@ -402,13 +402,13 @@ Step 2: หา stock moves ที่รองรับ
 - ถ้ามี moves จะ emit not_found พร้อมชื่อสินค้าจริงในใบ เพื่อช่วย debug ว่าชื่อสินค้าไม่ตรง domain
 - ถ้าไม่มี moves จะบอกว่าไม่มี moves ที่ยังไม่เสร็จ
 
-Step 3: หา lot + expiration date (ใหม่)
+Step 3: หา lot + expiration date + จำนวนต่อ lot
 
-- query `stock.move.line` ด้วย `[['move_id', 'in', move_ids]]` ดึง `product_id`, `lot_id`, `lot_name`
+- query `stock.move.line` ด้วย `[['move_id', 'in', move_ids]]` ดึง `product_id`, `lot_id`, `lot_name`, `quantity`
 - รวบรวม `lot_id` ที่ unique แล้วอ่าน `name` + `expiration_date` ทีเดียวจาก `stock.lot` (Odoo 15+) หรือ fallback `stock.production.lot` (รุ่นเก่า)
-- map เป็น dict `lots_by_product: { product_id: [{name, expiration_date}, ...] }` โดย dedupe ตาม name
+- map เป็น dict `lots_by_product: { product_id: [{name, expiration_date, qty}, ...] }` — dedupe ตาม name แต่ถ้า lot เดียวกันมีหลาย move line จะรวม `qty` เข้าด้วยกัน (ไม่ใช่ข้ามซ้ำเฉย ๆ)
 - ถ้า move line ไม่มี `lot_id` แต่มี `lot_name` (case lot ที่ยังไม่ถูก register) จะใช้ `lot_name` แทน, exp = ''
-- ถ้า lookup ทั้งบล็อค fail จะกลืน exception เงียบ ๆ — โหมดไม่มี lot ยังทำงานต่อได้
+- ถ้า lookup ทั้งบล็อค fail จะ print `[Lot] lookup failed, showing no lot info: {e}` แล้วดำเนินการต่อแบบไม่มี lot (ไม่ raise) — มี log เพราะ field `quantity` อาจไม่มีใน Odoo บางเวอร์ชัน ก่อนหน้านี้ error แบบนี้เงียบสนิทจนดูเหมือนใบนั้นไม่มี lot จริง ๆ
 
 ถ้าสำเร็จ:
 
@@ -871,7 +871,8 @@ Card building:
       `name[9:13]`; ถ้าสั้นกว่า 13 ตัวโชว์เต็ม) + จำนวนซอง (`: N ซอง`) + วันหมดอายุ
       (`(EXP dd/MM/yyyy)`); ถ้าไม่มี lot แสดง `Lot: -`. ขนาดฟอนต์ปรับอัตโนมัติ (13px ลงไปจนถึง
       8px floor) ตามจำนวน lot ของการ์ดนั้น ๆ ผ่าน `_fit_lot_label()`/`_fit_cards_to_viewport()` —
-      ถ้าล้นแม้ที่ 8px จะตัดเหลือ `+N lot` แทนการล้นการ์ด
+      ถ้าล้นแม้ที่ 8px จะตัดโชว์เท่าที่พอ แล้วสรุปที่เหลือเป็น `+N lot อื่น`; ถ้าพื้นที่ไม่พอจนโชว์ไม่ได้แม้แต่
+      lot เดียวจะขึ้น `N lot (พื้นที่ไม่พอ)` แทน (ไม่มี `+` นำหน้า เพราะความหมายคือ "ทั้งหมด" ไม่ใช่ "ที่เหลือ")
 - `_fit_cards_to_viewport()` พยายาม fit card 5 slots ใน scroll viewport (ปรับ fixed height ตามขนาด viewport)
 - `_cards_scroll` ถูก set `HorizontalScrollBarPolicy = ScrollBarAlwaysOff` ป้องกัน scroll แนวนอน
 
@@ -1299,6 +1300,9 @@ Lot/EXP ไม่ขึ้น:
 
 - บางใบใน Odoo ยังไม่ assign lot → `stock.move.line` ไม่มี `lot_id` หรือ `lot_name` → card จะแสดง `Lot: -`
 - ถ้า Odoo เป็นรุ่นเก่ามาก code ลอง `stock.lot` ก่อน fallback `stock.production.lot` — ถ้า model ทั้งสองไม่มี exp จะเป็น string ว่าง
+- ถ้า**ทุกการ์ด**ในใบเดียวกันแสดง `Lot: -` พร้อมกันหมด (ทั้งที่ปกติควรมี lot) ให้เช็ค stdout หา
+  `[Lot] lookup failed, showing no lot info: ...` — แปลว่า query `stock.move.line` ทั้งก้อน error จริง
+  (เช่น field `quantity` ไม่มีใน Odoo เวอร์ชันนั้น) ไม่ใช่แค่ใบนี้ไม่มี lot จริง ๆ
 
 Batch evaluator ไม่มี accuracy:
 
