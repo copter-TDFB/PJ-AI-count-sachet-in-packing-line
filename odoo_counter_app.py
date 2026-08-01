@@ -406,8 +406,8 @@ class BarcodeWorker(QThread):
                         existing['qty'] += qty
                     else:
                         bucket.append({'name': name, 'expiration_date': exp, 'qty': qty})
-            except Exception:
-                pass  # ไม่มี lot ก็ไม่เป็นไร ให้ดำเนินการต่อ
+            except Exception as e:
+                print(f"[Lot] lookup failed, showing no lot info: {e}", flush=True)
 
             self.data_ready.emit({'picking': picking, 'moves': moves, 'lots_by_product': lots_by_product})
 
@@ -1265,7 +1265,6 @@ class CounterPanel(QWidget):
     # เส้น "Lot:" ต้องพอดีในการ์ดเสมอ ห้ามล้น (หน้างานจะได้ไม่ต้องเลื่อนจอ) — ไล่ลอง
     # ขนาดตัวอักษรจากใหญ่สุดไปเล็กสุดตามจำนวน lot จริงของสินค้านั้น ๆ ทุกครั้งที่ resize
     _LOT_FONT_SIZES = (13, 12, 11, 10, 9, 8)
-    _LOT_FONT_MIN   = 8
 
     def __init__(self):
         super().__init__()
@@ -1857,7 +1856,7 @@ class CounterPanel(QWidget):
         # ความสูงที่ชื่อสินค้า + แถวจำนวน/สถานะกินไปแน่ ๆ (ฟอนต์คงที่ ไม่ขึ้นกับ card_h)
         # เหลือเท่าไหร่ถึงเป็นงบให้เส้น "Lot:" — ดู _create_product_card สำหรับ margin/spacing ที่อ้างถึง
         name_h = self._line_height_px(12)
-        row_h  = max(self._line_height_px(26), self._line_height_px(12) + 8)  # +8 = padding ของ lbl_status
+        row_h  = max(self._line_height_px(34), self._line_height_px(13) + 12)  # steady-state sizes _apply_counts sets (34px count, 13px font + 12px padding status) — not the smaller build-time defaults, else the budget undercounts once counting starts
         overhead_h = name_h + row_h + 12 + 2  # margins แนวตั้ง (6+6) + spacing 2 ช่อง (1px*2)
 
         for pr in self._product_rows:
@@ -1876,17 +1875,17 @@ class CounterPanel(QWidget):
         lbl_lot   = pr['lbl_lot']
         budget_h  = max(0, budget_h)
 
-        font_px = self._LOT_FONT_MIN
+        font_px = self._LOT_FONT_SIZES[-1]
         for candidate in self._LOT_FONT_SIZES:
             if self._line_height_px(candidate) * len(lot_lines) <= budget_h:
                 font_px = candidate
                 break
 
-        max_lines = max(1, budget_h // self._line_height_px(self._LOT_FONT_MIN))
+        max_lines = max(1, budget_h // self._line_height_px(self._LOT_FONT_SIZES[-1]))
         if len(lot_lines) <= max_lines:
             shown = lot_lines
         elif max_lines == 1:
-            shown = [f"+{len(lot_lines)} lot"]
+            shown = [f"{len(lot_lines)} lot (พื้นที่ไม่พอ)"]
         else:
             rest = len(lot_lines) - (max_lines - 1)
             shown = lot_lines[:max_lines - 1] + [f"+{rest} lot อื่น"]
