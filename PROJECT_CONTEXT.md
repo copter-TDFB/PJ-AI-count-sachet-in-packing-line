@@ -867,7 +867,11 @@ Card building:
   - product name
   - counted / demand
   - status badge
-  - Lot + EXP row (สีเขียวมิ้นต์) — แสดง lot names dedupe + วันหมดอายุในรูปแบบ `dd/MM/yyyy`; ถ้าไม่มี lot แสดง `Lot: -`
+  - Lot + EXP row (สีเขียวมิ้นต์) — 1 บรรทัดต่อ lot: รหัส lot ตัดเหลือ 4 ตัว (ตำแหน่ง 10-13,
+      `name[9:13]`; ถ้าสั้นกว่า 13 ตัวโชว์เต็ม) + จำนวนซอง (`: N ซอง`) + วันหมดอายุ
+      (`(EXP dd/MM/yyyy)`); ถ้าไม่มี lot แสดง `Lot: -`. ขนาดฟอนต์ปรับอัตโนมัติ (13px ลงไปจนถึง
+      8px floor) ตามจำนวน lot ของการ์ดนั้น ๆ ผ่าน `_fit_lot_label()`/`_fit_cards_to_viewport()` —
+      ถ้าล้นแม้ที่ 8px จะตัดเหลือ `+N lot` แทนการล้นการ์ด
 - `_fit_cards_to_viewport()` พยายาม fit card 5 slots ใน scroll viewport (ปรับ fixed height ตามขนาด viewport)
 - `_cards_scroll` ถูก set `HorizontalScrollBarPolicy = ScrollBarAlwaysOff` ป้องกัน scroll แนวนอน
 

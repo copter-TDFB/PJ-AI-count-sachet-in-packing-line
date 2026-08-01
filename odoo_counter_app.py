@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QScrollArea, QDialog, QSlider, QComboBox, QCheckBox
 )
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QRect
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QFont, QFontMetrics
 from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
 
 ODOO_URL      = 'https://tdfb.odoo.com'
@@ -361,7 +361,7 @@ class BarcodeWorker(QThread):
                     ODOO_DB, uid, ODOO_PASSWORD,
                     'stock.move.line', 'search_read',
                     [[['move_id', 'in', move_ids]]],
-                    {'fields': ['product_id', 'lot_id', 'lot_name']}
+                    {'fields': ['product_id', 'lot_id', 'lot_name', 'quantity']}
                 )
 
                 # รวบรวม lot_id ทั้งหมดเพื่อดึง expiration_date ทีเดียว
@@ -399,9 +399,13 @@ class BarcodeWorker(QThread):
                         exp  = ''
                     if not name:
                         continue
+                    qty = ml.get('quantity') or 0.0
                     bucket = lots_by_product.setdefault(pid, [])
-                    if not any(b['name'] == name for b in bucket):
-                        bucket.append({'name': name, 'expiration_date': exp})
+                    existing = next((b for b in bucket if b['name'] == name), None)
+                    if existing:
+                        existing['qty'] += qty
+                    else:
+                        bucket.append({'name': name, 'expiration_date': exp, 'qty': qty})
             except Exception:
                 pass  # ไม่มี lot ก็ไม่เป็นไร ให้ดำเนินการต่อ
 
@@ -1258,6 +1262,11 @@ class CounterPanel(QWidget):
     image_infer_requested  = pyqtSignal(str)
     snapshot_requested     = pyqtSignal(str)  # picking_name
 
+    # เส้น "Lot:" ต้องพอดีในการ์ดเสมอ ห้ามล้น (หน้างานจะได้ไม่ต้องเลื่อนจอ) — ไล่ลอง
+    # ขนาดตัวอักษรจากใหญ่สุดไปเล็กสุดตามจำนวน lot จริงของสินค้านั้น ๆ ทุกครั้งที่ resize
+    _LOT_FONT_SIZES = (13, 12, 11, 10, 9, 8)
+    _LOT_FONT_MIN   = 8
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AI นับซอง")
@@ -1683,15 +1692,13 @@ class CounterPanel(QWidget):
             demand  = int(m['product_uom_qty'])
             pid     = m['product_id'][0] if m.get('product_id') else None
             lots    = lots_by_product.get(pid, [])
-            card, lbl_count, lbl_status = self._create_product_card(pname, demand, lots)
-            self._cards_layout.addWidget(card)
+            row = self._create_product_card(pname, demand, lots)
+            self._cards_layout.addWidget(row['card'])
             self._product_rows.append({
                 'product_name': pname,
                 'demand':       m['product_uom_qty'],
                 'keyword':      keyword,
-                'card':         card,
-                'lbl_count':    lbl_count,
-                'lbl_status':   lbl_status,
+                **row,
             })
         self._cards_layout.addStretch(1)
         QTimer.singleShot(0, self._fit_cards_to_viewport)
@@ -1740,27 +1747,34 @@ class CounterPanel(QWidget):
         cl.addLayout(row)
 
         if lots:
-            lot_names = ', '.join(lot['name'] for lot in lots)
-            exp_dates = []
+            lot_lines = []
             for lot in lots:
+                raw_name = lot['name']
+                piece = raw_name[9:13] if len(raw_name) >= 13 else raw_name
+                qty = lot.get('qty')
+                if qty:
+                    piece += f": {qty:g} ซอง"
                 exp = (lot.get('expiration_date') or '').strip()
                 ymd = exp.split(' ')[0] if exp else ''
                 if ymd and ymd.count('-') == 2:
                     y, mo, d = ymd.split('-')
-                    exp_dates.append(f"{d}/{mo}/{y}")
-            exp_text = ', '.join(exp_dates) if exp_dates else ''
+                    piece += f" (EXP {d}/{mo}/{y})"
+                lot_lines.append(piece)
         else:
-            lot_names = '-'
-            exp_text = ''
+            lot_lines = ['-']
 
-        lbl_lot = QLabel(
-            f"Lot: {lot_names}    EXP: {exp_text}" if exp_text else f"Lot: {lot_names}"
-        )
-        lbl_lot.setStyleSheet("font-size:13px; color:#80CBC4; font-weight:bold;")
+        # ข้อความ/ขนาดตัวอักษรจริงตั้งค่าทีหลังใน _fit_lot_label (ต้องรู้ความสูงการ์ดก่อน)
+        lbl_lot = QLabel()
         lbl_lot.setWordWrap(True)
         cl.addWidget(lbl_lot)
 
-        return card, lbl_count, lbl_status
+        return {
+            'card':       card,
+            'lbl_count':  lbl_count,
+            'lbl_status': lbl_status,
+            'lbl_lot':    lbl_lot,
+            'lot_lines':  lot_lines,
+        }
 
     @staticmethod
     def _strip_ref(name: str) -> str:
@@ -1839,8 +1853,50 @@ class CounterPanel(QWidget):
         vp_h = self._cards_scroll.viewport().height()
         spacing = self._cards_layout.spacing() * (slots - 1)
         card_h = max(96, (vp_h - spacing) // slots)
+
+        # ความสูงที่ชื่อสินค้า + แถวจำนวน/สถานะกินไปแน่ ๆ (ฟอนต์คงที่ ไม่ขึ้นกับ card_h)
+        # เหลือเท่าไหร่ถึงเป็นงบให้เส้น "Lot:" — ดู _create_product_card สำหรับ margin/spacing ที่อ้างถึง
+        name_h = self._line_height_px(12)
+        row_h  = max(self._line_height_px(26), self._line_height_px(12) + 8)  # +8 = padding ของ lbl_status
+        overhead_h = name_h + row_h + 12 + 2  # margins แนวตั้ง (6+6) + spacing 2 ช่อง (1px*2)
+
         for pr in self._product_rows:
             pr['card'].setFixedHeight(card_h)
+            self._fit_lot_label(pr, card_h - overhead_h)
+
+    @staticmethod
+    def _line_height_px(px: int) -> int:
+        f = QFont()
+        f.setPixelSize(px)
+        return QFontMetrics(f).height()
+
+    def _fit_lot_label(self, pr: dict, budget_h: int) -> None:
+        """พอดีไม่ได้แม้ที่ font ต่ำสุด -> ตัดบรรทัดส่วนเกินเหลือ "+N lot" แทนล้นการ์ด"""
+        lot_lines = pr['lot_lines']
+        lbl_lot   = pr['lbl_lot']
+        budget_h  = max(0, budget_h)
+
+        font_px = self._LOT_FONT_MIN
+        for candidate in self._LOT_FONT_SIZES:
+            if self._line_height_px(candidate) * len(lot_lines) <= budget_h:
+                font_px = candidate
+                break
+
+        max_lines = max(1, budget_h // self._line_height_px(self._LOT_FONT_MIN))
+        if len(lot_lines) <= max_lines:
+            shown = lot_lines
+        elif max_lines == 1:
+            shown = [f"+{len(lot_lines)} lot"]
+        else:
+            rest = len(lot_lines) - (max_lines - 1)
+            shown = lot_lines[:max_lines - 1] + [f"+{rest} lot อื่น"]
+
+        text = 'Lot: ' + shown[0]
+        if len(shown) > 1:
+            text += '\n' + '\n'.join('     ' + s for s in shown[1:])
+
+        lbl_lot.setStyleSheet(f"font-size:{font_px}px; color:#80CBC4; font-weight:bold;")
+        lbl_lot.setText(text)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
