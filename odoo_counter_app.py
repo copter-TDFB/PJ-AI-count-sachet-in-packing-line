@@ -614,7 +614,8 @@ class InvoicePrintWorker(QThread):
 
             need_bill_field = orders[0].get(cfg['need_bill_field'])
             need_bill = need_bill_field[1] if isinstance(need_bill_field, (list, tuple)) else (need_bill_field or '')
-            if (need_bill or '').strip() != cfg['need_bill_value']:
+            documents = _resolve_documents_to_print(need_bill, cfg)
+            if not documents:
                 print(f"[Invoice] {self.picking_name}: need-bill flag not set, skip", flush=True)
                 return
 
@@ -640,15 +641,22 @@ class InvoicePrintWorker(QThread):
                 return
             invoice_name = invoices[0]['name']
 
-            self.print_status.emit('checking', f'กำลังดึงใบเสร็จ {invoice_name}...')
-            path = _download_invoice_pdf(models, uid, invoices[0]['id'], invoice_name, cfg['report_id'])
-            if not path:
-                self.print_status.emit('warn', f'ดึงใบเสร็จ {invoice_name} ไม่สำเร็จ')
-                return
+            printed = []
+            for report_id, label in documents:
+                self.print_status.emit('checking', f'กำลังดึง {label} ({invoice_name})...')
+                path = _download_invoice_pdf(models, uid, invoices[0]['id'], invoice_name, report_id)
+                if not path:
+                    self.print_status.emit(
+                        'warn',
+                        f'{self.picking_name}: พิมพ์ไปแล้ว {len(printed)}/{len(documents)} ฉบับ — ดึง {label} ไม่สำเร็จ'
+                    )
+                    return
+                _print_pdf_via_sumatra(cfg['sumatra_path'], printer, path)
+                printed.append(label)
 
-            _print_pdf_via_sumatra(cfg['sumatra_path'], printer, path)
-            self.print_status.emit('ok', f'พิมพ์ใบเสร็จ {invoice_name} แล้ว')
-            print(f"[Invoice] {self.picking_name}: printed {invoice_name}", flush=True)
+            suffix = f' ({" + ".join(printed)})' if len(printed) > 1 else ''
+            self.print_status.emit('ok', f'พิมพ์ใบเสร็จ {invoice_name} แล้ว{suffix}')
+            print(f"[Invoice] {self.picking_name}: printed {invoice_name} ({', '.join(printed)})", flush=True)
 
         except Exception as e:
             OdooConn.reset()
