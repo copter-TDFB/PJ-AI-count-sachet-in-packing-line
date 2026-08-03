@@ -287,7 +287,7 @@ def _download_invoice_pdf(models, uid, invoice_id: int, invoice_name: str, repor
             out_dir = _get_base_dir() / 'invoices'
             out_dir.mkdir(exist_ok=True)
             safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in invoice_name)
-            path = out_dir / f"{safe_name}.pdf"
+            path = out_dir / f"{safe_name}_{report_id}.pdf"
             path.write_bytes(r.content)
             return path
     except Exception as e:
@@ -651,7 +651,15 @@ class InvoicePrintWorker(QThread):
                         f'{self.picking_name}: พิมพ์ไปแล้ว {len(printed)}/{len(documents)} ฉบับ — ดึง {label} ไม่สำเร็จ'
                     )
                     return
-                _print_pdf_via_sumatra(cfg['sumatra_path'], printer, path)
+                try:
+                    _print_pdf_via_sumatra(cfg['sumatra_path'], printer, path)
+                except Exception as e:
+                    self.print_status.emit(
+                        'warn',
+                        f'{self.picking_name}: พิมพ์ไปแล้ว {len(printed)}/{len(documents)} ฉบับ — พิมพ์ {label} ไม่สำเร็จ ({e})'
+                    )
+                    print(f"[Invoice] {self.picking_name}: print failed for {label} — {e}", flush=True)
+                    return
                 printed.append(label)
 
             suffix = f' ({" + ".join(printed)})' if len(printed) > 1 else ''
