@@ -274,6 +274,9 @@ def _download_invoice_pdf(models, uid, invoice_id: int, invoice_name: str, repor
         return None
 
 
+THAI_BAHT_WORDING_ACTION_NAME = 'ใส่คำอ่าน ไทยบาท by feng'
+
+
 def _create_and_post_invoice(models, uid, sale_order_id: int) -> list | None:
     """Auto-invoice creation: sale order has zero invoices — create one via Odoo's standard
     "Create Invoice" wizard (sale.advance.payment.inv, same path the UI button uses) and post it
@@ -291,8 +294,9 @@ def _create_and_post_invoice(models, uid, sale_order_id: int) -> list | None:
         new_invoice_ids = _run_create_invoices_with_recovery(models, uid, sale_order_id, wizard_id, ctx)
         if not new_invoice_ids:
             raise RuntimeError("Odoo ไม่สร้างใบกำกับภาษีให้ (ไม่มีรายการที่ invoice ได้)")
-        _post_invoices_with_recovery(models, uid, new_invoice_ids)
         _link_sale_order_on_invoice(models, uid, new_invoice_ids, sale_order_id)
+        _apply_thai_baht_wording(models, uid, new_invoice_ids)
+        _post_invoices_with_recovery(models, uid, new_invoice_ids)
         return new_invoice_ids
     except Exception as e:
         print(f"[Invoice] สร้าง/post ใบกำกับภาษีไม่สำเร็จ (sale order {sale_order_id}): {e}", flush=True)
@@ -332,16 +336,36 @@ def _post_invoices_with_recovery(models, uid, invoice_ids: list):
             raise
 
 
+def _apply_thai_baht_wording(models, uid, invoice_ids: list):
+    """Run the Thai-baht wording server action against draft customer invoices."""
+    action_ids = models.execute_kw(
+        ODOO_DB, uid, ODOO_PASSWORD, 'ir.actions.server', 'search',
+        [[
+            ['name', '=', THAI_BAHT_WORDING_ACTION_NAME],
+            ['model_id.model', '=', 'account.move'],
+        ]],
+        {'limit': 1}
+    )
+    context = {
+        'active_model': 'account.move',
+        'active_ids': invoice_ids,
+        'active_id': invoice_ids[0],
+    }
+    models.execute_kw(
+        ODOO_DB, uid, ODOO_PASSWORD, 'ir.actions.server', 'run',
+        [action_ids], {'context': context}
+    )
+
+
 def _link_sale_order_on_invoice(models, uid, invoice_ids: list, sale_order_id: int):
-    """Best-effort: stamp x_studio_sale_order_id so Sale Type/Channel (related fields) show up.
-    Non-fatal — invoice is already posted and legally final by this point."""
-    try:
-        models.execute_kw(
-            ODOO_DB, uid, ODOO_PASSWORD, 'account.move', 'write',
-            [invoice_ids, {'x_studio_sale_order_id': sale_order_id}]
-        )
-    except Exception as e:
-        print(f"[Invoice] เชื่อม Sale Order ID ไม่สำเร็จ (invoice {invoice_ids}): {e}", flush=True)
+    """Stamp x_studio_sale_order_id on draft invoices before wording and posting.
+
+    This write is required because the downstream server action depends on it.
+    """
+    models.execute_kw(
+        ODOO_DB, uid, ODOO_PASSWORD, 'account.move', 'write',
+        [invoice_ids, {'x_studio_sale_order_id': sale_order_id}]
+    )
 
 
 # ── Worker: ค้นหา picking จาก barcode ───────────────────────
