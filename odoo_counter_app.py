@@ -346,6 +346,8 @@ def _apply_thai_baht_wording(models, uid, invoice_ids: list):
         ]],
         {'limit': 1}
     )
+    if not action_ids:
+        raise RuntimeError(f'ไม่พบ Odoo action: {THAI_BAHT_WORDING_ACTION_NAME}')
     context = {
         'active_model': 'account.move',
         'active_ids': invoice_ids,
