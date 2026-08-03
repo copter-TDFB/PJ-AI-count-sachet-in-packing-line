@@ -26,3 +26,5 @@ manual-html-preview.png
 
 # Claude Code local state (task worktrees, session config)
 .claude/
+
+.codex/
