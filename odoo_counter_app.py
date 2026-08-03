@@ -158,25 +158,46 @@ def _load_invoice_config() -> dict:
     Printer-picker UI lives in CropSettingsDialog (KAN-50) — printer_name is set there and
     persisted via _save_invoice_printer(), no more hand-editing the JSON file."""
     d = _load_config_dict()
-    printer_name        = d.get('invoice_printer_name')
-    auto_print_enabled  = d.get('invoice_auto_print_enabled')
-    auto_create_enabled = d.get('invoice_auto_create_enabled')
-    report_id           = d.get('invoice_report_id')
-    sumatra_path        = d.get('invoice_sumatra_path')
-    need_bill_field     = d.get('invoice_need_bill_field')
-    need_bill_value     = d.get('invoice_need_bill_value')
+    printer_name           = d.get('invoice_printer_name')
+    auto_print_enabled     = d.get('invoice_auto_print_enabled')
+    auto_create_enabled    = d.get('invoice_auto_create_enabled')
+    report_id              = d.get('invoice_report_id')
+    cr_report_id           = d.get('invoice_cr_report_id')
+    sumatra_path           = d.get('invoice_sumatra_path')
+    need_bill_field        = d.get('invoice_need_bill_field')
+    need_bill_value        = d.get('invoice_need_bill_value')
+    need_bill_credit_value = d.get('invoice_need_bill_credit_value')
     return {
         'printer_name':        printer_name if isinstance(printer_name, str) else '',
         'auto_print_enabled':  auto_print_enabled if isinstance(auto_print_enabled, bool) else True,
         'auto_create_enabled': auto_create_enabled if isinstance(auto_create_enabled, bool) else True,
         'report_id':           report_id if isinstance(report_id, int) else 1204,
+        'cr_report_id':        cr_report_id if isinstance(cr_report_id, int) else 1200,
         'sumatra_path':        sumatra_path if isinstance(sumatra_path, str) and sumatra_path
                                 else _default_sumatra_path(),
         'need_bill_field':     need_bill_field if isinstance(need_bill_field, str) and need_bill_field
                                 else 'x_studio_need_bill',
         'need_bill_value':     need_bill_value if isinstance(need_bill_value, str) and need_bill_value
                                 else 'ปริ้นใบเสร็จ',
+        'need_bill_credit_value': need_bill_credit_value
+                                if isinstance(need_bill_credit_value, str) and need_bill_credit_value
+                                else 'ปริ้นใบกำกับ (เครดิต)',
     }
+
+
+def _resolve_documents_to_print(need_bill: str, cfg: dict) -> list[tuple[int, str]]:
+    """Maps a matched need_bill value to the ordered list of (report_id, label) to
+    download and print. Empty list means need_bill matched neither known value —
+    caller logs and skips, unchanged from before this function existed."""
+    need_bill = (need_bill or '').strip()
+    if need_bill == cfg['need_bill_value']:
+        return [(cfg['report_id'], str(cfg['report_id']))]
+    if need_bill == cfg['need_bill_credit_value']:
+        return [
+            (cfg['report_id'], str(cfg['report_id'])),
+            (cfg['cr_report_id'], f"Cr.({cfg['cr_report_id']})"),
+        ]
+    return []
 
 
 # ── Connection cache ──────────────────────────────────────────

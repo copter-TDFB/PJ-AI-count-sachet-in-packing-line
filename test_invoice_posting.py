@@ -1,4 +1,4 @@
-from odoo_counter_app import _create_and_post_invoice
+from odoo_counter_app import _create_and_post_invoice, _resolve_documents_to_print
 
 
 class RecordingModels:
@@ -60,3 +60,52 @@ def test_missing_thai_baht_action_leaves_auto_created_invoice_unposted(capsys):
     assert invoice_ids is None
     assert ('account.move', 'action_post') not in [call[:2] for call in models.calls]
     assert 'ไม่พบ Odoo action' in capsys.readouterr().out
+
+
+def test_resolve_documents_to_print_cash_value_returns_single_report():
+    cfg = {
+        'need_bill_value': 'ปริ้นใบเสร็จ',
+        'need_bill_credit_value': 'ปริ้นใบกำกับ (เครดิต)',
+        'report_id': 1204,
+        'cr_report_id': 1200,
+    }
+
+    assert _resolve_documents_to_print('ปริ้นใบเสร็จ', cfg) == [(1204, '1204')]
+
+
+def test_resolve_documents_to_print_credit_value_returns_both_reports_in_order():
+    cfg = {
+        'need_bill_value': 'ปริ้นใบเสร็จ',
+        'need_bill_credit_value': 'ปริ้นใบกำกับ (เครดิต)',
+        'report_id': 1204,
+        'cr_report_id': 1200,
+    }
+
+    assert _resolve_documents_to_print('ปริ้นใบกำกับ (เครดิต)', cfg) == [
+        (1204, '1204'),
+        (1200, 'Cr.(1200)'),
+    ]
+
+
+def test_resolve_documents_to_print_unrelated_value_returns_empty_list():
+    cfg = {
+        'need_bill_value': 'ปริ้นใบเสร็จ',
+        'need_bill_credit_value': 'ปริ้นใบกำกับ (เครดิต)',
+        'report_id': 1204,
+        'cr_report_id': 1200,
+    }
+
+    assert _resolve_documents_to_print('', cfg) == []
+    assert _resolve_documents_to_print('บางค่าอื่นที่ไม่เกี่ยว', cfg) == []
+
+
+def test_resolve_documents_to_print_honors_config_overrides_not_hardcoded_defaults():
+    cfg = {
+        'need_bill_value': 'CASH',
+        'need_bill_credit_value': 'CREDIT',
+        'report_id': 111,
+        'cr_report_id': 222,
+    }
+
+    assert _resolve_documents_to_print('CASH', cfg) == [(111, '111')]
+    assert _resolve_documents_to_print('CREDIT', cfg) == [(111, '111'), (222, 'Cr.(222)')]
