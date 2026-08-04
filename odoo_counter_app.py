@@ -650,6 +650,7 @@ class InvoicePrintWorker(QThread):
                         'warn',
                         f'{self.picking_name}: พิมพ์ไปแล้ว {len(printed)}/{len(documents)} ฉบับ — ดึง {label} ไม่สำเร็จ'
                     )
+                    print(f"[Invoice] {self.picking_name}: download failed for {label}", flush=True)
                     return
                 try:
                     _print_pdf_via_sumatra(cfg['sumatra_path'], printer, path)
