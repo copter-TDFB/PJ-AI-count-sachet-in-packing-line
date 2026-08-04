@@ -142,28 +142,62 @@ def _save_invoice_auto_print(enabled: bool):
     config_path.write_text(json.dumps(d, indent=2), encoding='utf-8')
 
 
+def _save_invoice_auto_create(enabled: bool):
+    """Sibling of _save_invoice_auto_print() for the invoice auto-create-if-missing kill
+    switch — same merge-based save, kept as its own key so it can be toggled independently
+    of auto-print."""
+    config_path = _config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    d = _load_config_dict()
+    d.update({'invoice_auto_create_enabled': enabled})
+    config_path.write_text(json.dumps(d, indent=2), encoding='utf-8')
+
+
 def _load_invoice_config() -> dict:
     """Invoice auto-print settings (KAN-47), read from the same crop_config.json.
     Printer-picker UI lives in CropSettingsDialog (KAN-50) — printer_name is set there and
     persisted via _save_invoice_printer(), no more hand-editing the JSON file."""
     d = _load_config_dict()
-    printer_name       = d.get('invoice_printer_name')
-    auto_print_enabled = d.get('invoice_auto_print_enabled')
-    report_id          = d.get('invoice_report_id')
-    sumatra_path       = d.get('invoice_sumatra_path')
-    need_bill_field    = d.get('invoice_need_bill_field')
-    need_bill_value    = d.get('invoice_need_bill_value')
+    printer_name           = d.get('invoice_printer_name')
+    auto_print_enabled     = d.get('invoice_auto_print_enabled')
+    auto_create_enabled    = d.get('invoice_auto_create_enabled')
+    report_id              = d.get('invoice_report_id')
+    cr_report_id           = d.get('invoice_cr_report_id')
+    sumatra_path           = d.get('invoice_sumatra_path')
+    need_bill_field        = d.get('invoice_need_bill_field')
+    need_bill_value        = d.get('invoice_need_bill_value')
+    need_bill_credit_value = d.get('invoice_need_bill_credit_value')
     return {
-        'printer_name':       printer_name if isinstance(printer_name, str) else '',
-        'auto_print_enabled': auto_print_enabled if isinstance(auto_print_enabled, bool) else True,
-        'report_id':          report_id if isinstance(report_id, int) else 1204,
-        'sumatra_path':       sumatra_path if isinstance(sumatra_path, str) and sumatra_path
-                               else _default_sumatra_path(),
-        'need_bill_field':    need_bill_field if isinstance(need_bill_field, str) and need_bill_field
-                               else 'x_studio_need_bill',
-        'need_bill_value':    need_bill_value if isinstance(need_bill_value, str) and need_bill_value
-                               else 'ปริ้นใบเสร็จ',
+        'printer_name':        printer_name if isinstance(printer_name, str) else '',
+        'auto_print_enabled':  auto_print_enabled if isinstance(auto_print_enabled, bool) else True,
+        'auto_create_enabled': auto_create_enabled if isinstance(auto_create_enabled, bool) else True,
+        'report_id':           report_id if isinstance(report_id, int) else 1204,
+        'cr_report_id':        cr_report_id if isinstance(cr_report_id, int) else 1200,
+        'sumatra_path':        sumatra_path if isinstance(sumatra_path, str) and sumatra_path
+                                else _default_sumatra_path(),
+        'need_bill_field':     need_bill_field if isinstance(need_bill_field, str) and need_bill_field
+                                else 'x_studio_need_bill',
+        'need_bill_value':     need_bill_value if isinstance(need_bill_value, str) and need_bill_value
+                                else 'ปริ้นใบเสร็จ',
+        'need_bill_credit_value': need_bill_credit_value
+                                if isinstance(need_bill_credit_value, str) and need_bill_credit_value
+                                else 'ปริ้นใบกำกับ (เครดิต)',
     }
+
+
+def _resolve_documents_to_print(need_bill: str, cfg: dict) -> list[tuple[int, str]]:
+    """Maps a matched need_bill value to the ordered list of (report_id, label) to
+    download and print. Empty list means need_bill matched neither known value —
+    caller logs and skips, unchanged from before this function existed."""
+    need_bill = (need_bill or '').strip()
+    if need_bill == cfg['need_bill_value']:
+        return [(cfg['report_id'], str(cfg['report_id']))]
+    if need_bill == cfg['need_bill_credit_value']:
+        return [
+            (cfg['report_id'], str(cfg['report_id'])),
+            (cfg['cr_report_id'], f"Cr.({cfg['cr_report_id']})"),
+        ]
+    return []
 
 
 # ── Connection cache ──────────────────────────────────────────
@@ -253,12 +287,108 @@ def _download_invoice_pdf(models, uid, invoice_id: int, invoice_name: str, repor
             out_dir = _get_base_dir() / 'invoices'
             out_dir.mkdir(exist_ok=True)
             safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in invoice_name)
-            path = out_dir / f"{safe_name}.pdf"
+            path = out_dir / f"{safe_name}_{report_id}.pdf"
             path.write_bytes(r.content)
             return path
     except Exception as e:
         print(f"[Invoice] ดาวน์โหลดไม่สำเร็จ: {e}", flush=True)
         return None
+
+
+THAI_BAHT_WORDING_ACTION_NAME = 'ใส่คำอ่าน ไทยบาท by feng'
+
+
+def _create_and_post_invoice(models, uid, sale_order_id: int) -> list | None:
+    """Auto-invoice creation: sale order has zero invoices — create one via Odoo's standard
+    "Create Invoice" wizard (sale.advance.payment.inv, same path the UI button uses) and post it
+    immediately so it has a real tax invoice number and can be printed. Returns new invoice_ids,
+    or None on failure. Posted invoices are legally final in Odoo — see docs/adr/0003 and
+    docs/adr/0004."""
+    try:
+        ctx = {'active_model': 'sale.order', 'active_ids': [sale_order_id], 'active_id': sale_order_id}
+        wizard_id = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'sale.advance.payment.inv', 'create',
+            [{'advance_payment_method': 'delivered'}],  # 'delivered' = "Regular invoice", not down payment
+            {'context': ctx}
+        )
+        new_invoice_ids = _run_create_invoices_with_recovery(models, uid, sale_order_id, wizard_id, ctx)
+        if not new_invoice_ids:
+            raise RuntimeError("Odoo ไม่สร้างใบกำกับภาษีให้ (ไม่มีรายการที่ invoice ได้)")
+        _link_sale_order_on_invoice(models, uid, new_invoice_ids, sale_order_id)
+        _apply_thai_baht_wording(models, uid, new_invoice_ids)
+        _post_invoices_with_recovery(models, uid, new_invoice_ids)
+        return new_invoice_ids
+    except Exception as e:
+        print(f"[Invoice] สร้าง/post ใบกำกับภาษีไม่สำเร็จ (sale order {sale_order_id}): {e}", flush=True)
+        return None
+
+
+def _run_create_invoices_with_recovery(models, uid, sale_order_id: int, wizard_id: int, ctx: dict) -> list:
+    """Call the wizard's create_invoices; if the RPC response itself fails to marshal, re-read
+    invoice_ids to check whether the invoice was actually created before giving up."""
+    try:
+        models.execute_kw(
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'sale.advance.payment.inv', 'create_invoices',
+            [[wizard_id]], {'context': ctx}
+        )
+    except Exception as e:
+        print(f"[Invoice] create_invoices RPC error — เช็คซ้ำว่าสร้างสำเร็จจริงไหม: {e}", flush=True)
+    orders = models.execute_kw(
+        ODOO_DB, uid, ODOO_PASSWORD, 'sale.order', 'read',
+        [[sale_order_id]], {'fields': ['invoice_ids']}
+    )
+    return orders[0].get('invoice_ids') or []
+
+
+def _post_invoices_with_recovery(models, uid, invoice_ids: list):
+    """Call action_post; if the RPC response fails to marshal, re-read the invoice state before
+    re-raising — the post may have actually succeeded server-side."""
+    try:
+        models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD, 'account.move', 'action_post', [invoice_ids])
+    except Exception:
+        print(f"[Invoice] action_post RPC error — เช็คซ้ำสถานะจริงก่อนยอมแพ้", flush=True)
+        invoices = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASSWORD, 'account.move', 'read',
+            [invoice_ids], {'fields': ['state']}
+        )
+        if any(inv['state'] != 'posted' for inv in invoices):
+            raise
+
+
+def _apply_thai_baht_wording(models, uid, invoice_ids: list):
+    """Run the Thai-baht wording server action against draft customer invoices."""
+    action_ids = models.execute_kw(
+        ODOO_DB, uid, ODOO_PASSWORD, 'ir.actions.server', 'search',
+        [[
+            ['name', '=', THAI_BAHT_WORDING_ACTION_NAME],
+            ['model_id.model', '=', 'account.move'],
+        ]],
+        {'limit': 1}
+    )
+    if not action_ids:
+        raise RuntimeError(f'ไม่พบ Odoo action: {THAI_BAHT_WORDING_ACTION_NAME}')
+    context = {
+        'active_model': 'account.move',
+        'active_ids': invoice_ids,
+        'active_id': invoice_ids[0],
+    }
+    models.execute_kw(
+        ODOO_DB, uid, ODOO_PASSWORD, 'ir.actions.server', 'run',
+        [action_ids], {'context': context}
+    )
+
+
+def _link_sale_order_on_invoice(models, uid, invoice_ids: list, sale_order_id: int):
+    """Stamp x_studio_sale_order_id on draft invoices before wording and posting.
+
+    This write is required because the downstream server action depends on it.
+    """
+    models.execute_kw(
+        ODOO_DB, uid, ODOO_PASSWORD, 'account.move', 'write',
+        [invoice_ids, {'x_studio_sale_order_id': sale_order_id}]
+    )
 
 
 # ── Worker: ค้นหา picking จาก barcode ───────────────────────
@@ -484,14 +614,21 @@ class InvoicePrintWorker(QThread):
 
             need_bill_field = orders[0].get(cfg['need_bill_field'])
             need_bill = need_bill_field[1] if isinstance(need_bill_field, (list, tuple)) else (need_bill_field or '')
-            if (need_bill or '').strip() != cfg['need_bill_value']:
+            documents = _resolve_documents_to_print(need_bill, cfg)
+            if not documents:
                 print(f"[Invoice] {self.picking_name}: need-bill flag not set, skip", flush=True)
                 return
 
             invoice_ids = orders[0].get('invoice_ids') or []
             if not invoice_ids:
-                self.print_status.emit('warn', f'{self.picking_name}: ยังไม่มีใบกำกับภาษี')
-                return
+                if not cfg['auto_create_enabled']:
+                    self.print_status.emit('warn', f'{self.picking_name}: ยังไม่มีใบกำกับภาษี')
+                    return
+                self.print_status.emit('checking', f'{self.picking_name}: กำลังสร้างใบกำกับภาษี...')
+                invoice_ids = _create_and_post_invoice(models, uid, self.sale_order_id)
+                if not invoice_ids:
+                    self.print_status.emit('warn', f'{self.picking_name}: สร้างใบกำกับภาษีไม่สำเร็จ')
+                    return
 
             invoices = models.execute_kw(
                 ODOO_DB, uid, ODOO_PASSWORD,
@@ -504,15 +641,31 @@ class InvoicePrintWorker(QThread):
                 return
             invoice_name = invoices[0]['name']
 
-            self.print_status.emit('checking', f'กำลังดึงใบเสร็จ {invoice_name}...')
-            path = _download_invoice_pdf(models, uid, invoices[0]['id'], invoice_name, cfg['report_id'])
-            if not path:
-                self.print_status.emit('warn', f'ดึงใบเสร็จ {invoice_name} ไม่สำเร็จ')
-                return
+            printed = []
+            for report_id, label in documents:
+                self.print_status.emit('checking', f'กำลังดึง {label} ({invoice_name})...')
+                path = _download_invoice_pdf(models, uid, invoices[0]['id'], invoice_name, report_id)
+                if not path:
+                    self.print_status.emit(
+                        'warn',
+                        f'{self.picking_name}: พิมพ์ไปแล้ว {len(printed)}/{len(documents)} ฉบับ — ดึง {label} ไม่สำเร็จ'
+                    )
+                    print(f"[Invoice] {self.picking_name}: download failed for {label}", flush=True)
+                    return
+                try:
+                    _print_pdf_via_sumatra(cfg['sumatra_path'], printer, path)
+                except Exception as e:
+                    self.print_status.emit(
+                        'warn',
+                        f'{self.picking_name}: พิมพ์ไปแล้ว {len(printed)}/{len(documents)} ฉบับ — พิมพ์ {label} ไม่สำเร็จ ({e})'
+                    )
+                    print(f"[Invoice] {self.picking_name}: print failed for {label} — {e}", flush=True)
+                    return
+                printed.append(label)
 
-            _print_pdf_via_sumatra(cfg['sumatra_path'], printer, path)
-            self.print_status.emit('ok', f'พิมพ์ใบเสร็จ {invoice_name} แล้ว')
-            print(f"[Invoice] {self.picking_name}: printed {invoice_name}", flush=True)
+            suffix = f' ({" + ".join(printed)})' if len(printed) > 1 else ''
+            self.print_status.emit('ok', f'พิมพ์ใบเสร็จ {invoice_name} แล้ว{suffix}')
+            print(f"[Invoice] {self.picking_name}: printed {invoice_name} ({', '.join(printed)})", flush=True)
 
         except Exception as e:
             OdooConn.reset()
@@ -1060,7 +1213,7 @@ class CropPreviewWidget(QWidget):
 
 
 class CropSettingsDialog(QDialog):
-    def __init__(self, current_rect: tuple, current_conf: float, current_printer: str = '', current_auto_print: bool = True, parent=None):
+    def __init__(self, current_rect: tuple, current_conf: float, current_printer: str = '', current_auto_print: bool = True, current_auto_create: bool = True, parent=None):
         super().__init__(parent)
         self.setWindowTitle("ตั้งค่ากล้อง / Detection")
         self.resize(960, 720)
@@ -1133,6 +1286,11 @@ class CropSettingsDialog(QDialog):
         self.chk_auto_print.setChecked(current_auto_print)
         self.chk_auto_print.setStyleSheet("color:#eee; font-size:13px;")
         pv.addWidget(self.chk_auto_print)
+
+        self.chk_auto_create = QCheckBox("อนุญาตให้สร้างใบกำกับภาษีอัตโนมัติ")
+        self.chk_auto_create.setChecked(current_auto_create)
+        self.chk_auto_create.setStyleSheet("color:#eee; font-size:13px;")
+        pv.addWidget(self.chk_auto_create)
 
         pl = QHBoxLayout()
         pl.setSpacing(10)
@@ -1234,6 +1392,9 @@ class CropSettingsDialog(QDialog):
 
     def get_auto_print_enabled(self) -> bool:
         return self.chk_auto_print.isChecked()
+
+    def get_auto_create_enabled(self) -> bool:
+        return self.chk_auto_create.isChecked()
 
     def _on_test_print(self):
         printer = self.get_printer()
@@ -2079,7 +2240,8 @@ class MainWindow(QMainWindow):
         inv_cfg = _load_invoice_config()
         cur_printer = inv_cfg['printer_name']
         cur_auto_print = inv_cfg['auto_print_enabled']
-        dlg = CropSettingsDialog(cur_rect, cur_conf, cur_printer, cur_auto_print, parent=self)
+        cur_auto_create = inv_cfg['auto_create_enabled']
+        dlg = CropSettingsDialog(cur_rect, cur_conf, cur_printer, cur_auto_print, cur_auto_create, parent=self)
         self._camera_worker.set_emit_raw(True)
         self._camera_worker.raw_frame_ready.connect(dlg.update_frame)
         try:
@@ -2088,12 +2250,14 @@ class MainWindow(QMainWindow):
                 new_conf = dlg.get_conf()
                 new_printer = dlg.get_printer()
                 new_auto_print = dlg.get_auto_print_enabled()
+                new_auto_create = dlg.get_auto_create_enabled()
                 self._camera_worker.set_crop_rect(new_rect)
                 self._camera_worker.set_conf(new_conf)
                 try:
                     _save_settings(new_rect, new_conf)
                     _save_invoice_printer(new_printer)
                     _save_invoice_auto_print(new_auto_print)
+                    _save_invoice_auto_create(new_auto_create)
                     self.lbl_status.setText(
                         f"บันทึก: crop {new_rect[2]*100:.0f}%×{new_rect[3]*100:.0f}%, conf {new_conf:.2f}"
                     )
