@@ -26,3 +26,9 @@ manual-html-preview.png
 
 # Claude Code local state (task worktrees, session config)
 .claude/
+
+# pm-bridge: packet/state dirs and executor scratch output. The PM commits
+# with `git add -A` before any review, so unignored scratch lands in the PR.
+.worktrees/
+.codex/
+.opencode/
