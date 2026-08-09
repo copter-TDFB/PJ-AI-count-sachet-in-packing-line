@@ -28,8 +28,8 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QFont, QFontMetrics
 from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
 
-ODOO_URL      = 'https://tdfb-10072026-test-v2.odoo.com'
-ODOO_DB       = 'tdfb-10072026-test-v2'
+ODOO_URL      = 'https://tdfb.odoo.com'
+ODOO_DB       = 'tdfb'
 ODOO_USER     = 'operation.engineer@tdfb.co'
 ODOO_PASSWORD = 'KBT123'
 SHOP_IDENTITY_FIELD = 'x_studio_sender_name'  # sale.order many2one — validated against real data, see KAN-53 spike
