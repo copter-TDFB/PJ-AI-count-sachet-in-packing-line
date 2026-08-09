@@ -24,8 +24,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
 
-ODOO_URL      = 'https://tdfb-10072026-test.odoo.com'
-ODOO_DB       = 'tdfb-10072026-test'
+ODOO_URL      = 'https://tdfb-10072026-test-v2.odoo.com'
+ODOO_DB       = 'tdfb-10072026-test-v2'
 ODOO_USER     = 'operation.engineer@tdfb.co'
 ODOO_PASSWORD = 'KBT123'
 

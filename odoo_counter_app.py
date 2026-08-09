@@ -28,8 +28,8 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QFont, QFontMetrics
 from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
 
-ODOO_URL      = 'https://tdfb.odoo.com'
-ODOO_DB       = 'tdfb'
+ODOO_URL      = 'https://tdfb-10072026-test-v2.odoo.com'
+ODOO_DB       = 'tdfb-10072026-test-v2'
 ODOO_USER     = 'operation.engineer@tdfb.co'
 ODOO_PASSWORD = 'KBT123'
 SHOP_IDENTITY_FIELD = 'x_studio_sender_name'  # sale.order many2one — validated against real data, see KAN-53 spike
@@ -193,10 +193,7 @@ def _resolve_documents_to_print(need_bill: str, cfg: dict) -> list[tuple[int, st
     if need_bill == cfg['need_bill_value']:
         return [(cfg['report_id'], str(cfg['report_id']))]
     if need_bill == cfg['need_bill_credit_value']:
-        return [
-            (cfg['report_id'], str(cfg['report_id'])),
-            (cfg['cr_report_id'], f"Cr.({cfg['cr_report_id']})"),
-        ]
+        return [(cfg['cr_report_id'], f"Cr.({cfg['cr_report_id']})")]
     return []
 
 
@@ -295,7 +292,7 @@ def _download_invoice_pdf(models, uid, invoice_id: int, invoice_name: str, repor
         return None
 
 
-THAI_BAHT_WORDING_ACTION_NAME = 'ใส่คำอ่าน ไทยบาท by feng'
+THAI_BAHT_WORDING_ACTION_ID = 956
 
 
 def _create_and_post_invoice(models, uid, sale_order_id: int) -> list | None:
@@ -359,16 +356,6 @@ def _post_invoices_with_recovery(models, uid, invoice_ids: list):
 
 def _apply_thai_baht_wording(models, uid, invoice_ids: list):
     """Run the Thai-baht wording server action against draft customer invoices."""
-    action_ids = models.execute_kw(
-        ODOO_DB, uid, ODOO_PASSWORD, 'ir.actions.server', 'search',
-        [[
-            ['name', '=', THAI_BAHT_WORDING_ACTION_NAME],
-            ['model_id.model', '=', 'account.move'],
-        ]],
-        {'limit': 1}
-    )
-    if not action_ids:
-        raise RuntimeError(f'ไม่พบ Odoo action: {THAI_BAHT_WORDING_ACTION_NAME}')
     context = {
         'active_model': 'account.move',
         'active_ids': invoice_ids,
@@ -376,7 +363,7 @@ def _apply_thai_baht_wording(models, uid, invoice_ids: list):
     }
     models.execute_kw(
         ODOO_DB, uid, ODOO_PASSWORD, 'ir.actions.server', 'run',
-        [action_ids], {'context': context}
+        [[THAI_BAHT_WORDING_ACTION_ID]], {'context': context}
     )
 
 
@@ -575,6 +562,29 @@ def _render_test_print_pdf() -> Path:
     return path
 
 
+class _TestPrintWorker(QThread):
+    """Runs the Test Print button's SumatraPDF call off the UI thread. _print_pdf_via_sumatra()
+    is subprocess.run(...) — genuinely blocking for as long as the printer/spooler takes (up
+    to its 30s timeout) — so calling it directly from the button handler froze the whole app
+    for that long. Mirrors InvoicePrintWorker's QThread pattern below."""
+    result = pyqtSignal(bool, str)
+
+    def __init__(self, sumatra_path: str, printer: str, pdf_path: Path):
+        super().__init__()
+        self.sumatra_path = sumatra_path
+        self.printer = printer
+        self.pdf_path = pdf_path
+
+    def run(self):
+        try:
+            _print_pdf_via_sumatra(self.sumatra_path, self.printer, self.pdf_path)
+            self.result.emit(True, f"ส่งพิมพ์ทดสอบไปที่ {self.printer} แล้ว")
+        except Exception as e:
+            self.result.emit(False, f"พิมพ์ทดสอบล้มเหลว: {e}")
+        finally:
+            self.pdf_path.unlink(missing_ok=True)
+
+
 # ── Worker: พิมพ์ใบกำกับภาษีอัตโนมัติ (invoice auto-print, KAN-47) ──
 class InvoicePrintWorker(QThread):
     print_status = pyqtSignal(str, str)  # ('ok'|'checking'|'warn'), message
@@ -663,7 +673,7 @@ class InvoicePrintWorker(QThread):
                     return
                 printed.append(label)
 
-            suffix = f' ({" + ".join(printed)})' if len(printed) > 1 else ''
+            suffix = f' ({" + ".join(printed)})'
             self.print_status.emit('ok', f'พิมพ์ใบเสร็จ {invoice_name} แล้ว{suffix}')
             print(f"[Invoice] {self.picking_name}: printed {invoice_name} ({', '.join(printed)})", flush=True)
 
@@ -1218,6 +1228,7 @@ class CropSettingsDialog(QDialog):
         self.setWindowTitle("ตั้งค่ากล้อง / Detection")
         self.resize(960, 720)
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        self._test_print_worker: _TestPrintWorker | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -1318,6 +1329,8 @@ class CropSettingsDialog(QDialog):
         btn_reset  = QPushButton("รีเซ็ตเต็มจอ")
         btn_cancel = QPushButton("ยกเลิก")
         btn_save   = QPushButton("บันทึก")
+        self._btn_cancel = btn_cancel
+        self._btn_save   = btn_save
         for b in (btn_reset, btn_cancel, btn_save):
             b.setFixedHeight(38)
             b.setMinimumWidth(120)
@@ -1402,19 +1415,35 @@ class CropSettingsDialog(QDialog):
             self.lbl_print_status.setText("กรุณาเลือกเครื่องพิมพ์ก่อนพิมพ์ทดสอบ")
             self.lbl_print_status.setStyleSheet("color:#FFB300; font-size:12px;")
             return
-        pdf_path = None
         try:
             cfg = _load_invoice_config()
             pdf_path = _render_test_print_pdf()
-            _print_pdf_via_sumatra(cfg['sumatra_path'], printer, pdf_path)
-            self.lbl_print_status.setText(f"ส่งพิมพ์ทดสอบไปที่ {printer} แล้ว")
-            self.lbl_print_status.setStyleSheet("color:#66BB6A; font-size:12px;")
         except Exception as e:
             self.lbl_print_status.setText(f"พิมพ์ทดสอบล้มเหลว: {e}")
             self.lbl_print_status.setStyleSheet("color:#EF5350; font-size:12px;")
-        finally:
-            if pdf_path is not None:
-                pdf_path.unlink(missing_ok=True)
+            return
+
+        self.lbl_print_status.setText("กำลังพิมพ์ทดสอบ...")
+        self.lbl_print_status.setStyleSheet("color:#ccc; font-size:12px;")
+        for b in (self.btn_test_print, self._btn_cancel, self._btn_save):
+            b.setEnabled(False)
+
+        worker = _TestPrintWorker(cfg['sumatra_path'], printer, pdf_path)
+        worker.result.connect(self._on_test_print_result)
+        worker.finished.connect(self._on_test_print_worker_finished)
+        self._test_print_worker = worker
+        worker.start()
+
+    def _on_test_print_result(self, ok: bool, message: str):
+        self.lbl_print_status.setText(message)
+        self.lbl_print_status.setStyleSheet(
+            "color:#66BB6A; font-size:12px;" if ok else "color:#EF5350; font-size:12px;"
+        )
+
+    def _on_test_print_worker_finished(self):
+        self._test_print_worker = None
+        for b in (self.btn_test_print, self._btn_cancel, self._btn_save):
+            b.setEnabled(True)
 
 
 # ── หน้าต่างนับ (เด้งขึ้นเมื่อเจอ Excellent/Houjicha 3g) ────
