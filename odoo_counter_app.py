@@ -412,16 +412,18 @@ def _post_invoices_with_recovery(models, uid, invoice_ids: list):
 
 
 def _apply_thai_baht_wording(models, uid, invoice_ids: list):
-    """Run the Thai-baht wording server action against draft customer invoices."""
-    context = {
-        'active_model': 'account.move',
-        'active_ids': invoice_ids,
-        'active_id': invoice_ids[0],
-    }
-    models.execute_kw(
-        ODOO_DB, uid, ODOO_PASSWORD, 'ir.actions.server', 'run',
-        [[THAI_BAHT_WORDING_ACTION_ID]], {'context': context}
+    """Compute Thai baht-text locally and write it to x_studio_thai_bahttext —
+    the account has no access to run ir.actions.server (Settings-only in Odoo)."""
+    invoices = models.execute_kw(
+        ODOO_DB, uid, ODOO_PASSWORD, 'account.move', 'read',
+        [invoice_ids], {'fields': ['amount_total']}
     )
+    for inv in invoices:
+        text = _amount_to_thai_baht_text(inv['amount_total'])
+        models.execute_kw(
+            ODOO_DB, uid, ODOO_PASSWORD, 'account.move', 'write',
+            [[inv['id']], {'x_studio_thai_bahttext': text}]
+        )
 
 
 def _link_sale_order_on_invoice(models, uid, invoice_ids: list, sale_order_id: int):
