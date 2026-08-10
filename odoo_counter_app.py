@@ -292,7 +292,64 @@ def _download_invoice_pdf(models, uid, invoice_id: int, invoice_name: str, repor
         return None
 
 
-THAI_BAHT_WORDING_ACTION_ID = 956
+_THAI_DIGITS = ('ศูนย์', 'หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า', 'หก', 'เจ็ด', 'แปด', 'เก้า')
+_THAI_PLACES = ('', 'สิบ', 'ร้อย', 'พัน', 'หมื่น', 'แสน')
+
+
+def _thai_six_digit_text(n: int) -> str:
+    """Converts 0-999999 to Thai words. Caller handles grouping above 999999 with 'ล้าน'."""
+    if n == 0:
+        return ''
+    digits = str(n)
+    length = len(digits)
+    parts = []
+    for i, ch in enumerate(digits):
+        d = int(ch)
+        if d == 0:
+            continue
+        place = length - i - 1
+        if place == 0:
+            parts.append('เอ็ด' if (d == 1 and length > 1) else _THAI_DIGITS[d])
+        elif place == 1:
+            if d == 1:
+                parts.append('สิบ')
+            elif d == 2:
+                parts.append('ยี่สิบ')
+            else:
+                parts.append(_THAI_DIGITS[d] + 'สิบ')
+        else:
+            parts.append(_THAI_DIGITS[d] + _THAI_PLACES[place])
+    return ''.join(parts)
+
+
+def _thai_number_to_text(n: int) -> str:
+    """Converts a non-negative integer to Thai words, grouping every 6 digits with 'ล้าน'."""
+    if n == 0:
+        return _THAI_DIGITS[0]
+    groups = []
+    while n > 0:
+        groups.append(n % 1_000_000)
+        n //= 1_000_000
+    groups.reverse()
+    last_index = len(groups) - 1
+    parts = []
+    for i, group in enumerate(groups):
+        if group == 0:
+            continue
+        parts.append(_thai_six_digit_text(group))
+        if i != last_index:
+            parts.append('ล้าน')
+    return ''.join(parts)
+
+
+def _amount_to_thai_baht_text(amount: float) -> str:
+    """Converts a money amount to Thai baht-text, e.g. 3690.0 -> 'สามพันหกร้อยเก้าสิบบาทถ้วน'."""
+    total_satang = round(amount * 100)
+    baht, satang = divmod(total_satang, 100)
+    baht_text = _thai_number_to_text(baht) + 'บาท'
+    if satang == 0:
+        return baht_text + 'ถ้วน'
+    return baht_text + _thai_number_to_text(satang) + 'สตางค์'
 
 
 def _create_and_post_invoice(models, uid, sale_order_id: int) -> list | None:
