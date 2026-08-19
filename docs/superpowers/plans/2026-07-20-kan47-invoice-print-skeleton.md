@@ -253,7 +253,7 @@ import xmlrpc.client
 ODOO_URL = 'https://tdfb.odoo.com'
 ODOO_DB = 'tdfb'
 ODOO_USER = 'operation.engineer@tdfb.co'
-ODOO_PASSWORD = 'KBT123'
+ODOO_PASSWORD = '***REDACTED***'
 
 common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
 uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_PASSWORD, {})
@@ -813,7 +813,7 @@ import xmlrpc.client
 ODOO_URL = 'https://tdfb.odoo.com'
 ODOO_DB = 'tdfb'
 ODOO_USER = 'operation.engineer@tdfb.co'
-ODOO_PASSWORD = 'KBT123'
+ODOO_PASSWORD = '***REDACTED***'
 
 common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
 uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_PASSWORD, {})

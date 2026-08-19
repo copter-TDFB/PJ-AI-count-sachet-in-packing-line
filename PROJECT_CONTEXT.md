@@ -250,11 +250,25 @@ Failure behavior:
 
 ค่าคงที่สำคัญ:
 
-- `ODOO_URL = 'https://tdfb.odoo.com'`
-- `ODOO_DB = 'tdfb'`
-- `ODOO_USER` และ `ODOO_PASSWORD` ถูก hard-code ใน source แต่ไม่ควร copy secret เพิ่มในเอกสารหรือ commit public
+- `ODOO_URL` / `ODOO_DB` / `ODOO_USER` / `ODOO_PASSWORD` — **ไม่มีค่าจริงใน source** (repo นี้เป็น public)
+  ค่าเริ่มต้นเป็น `''` แล้วถูกเติมโดย `_apply_odoo_config()` ตอน import จาก source แรกที่ให้ครบทั้ง 4 ค่า:
+  1. OS environment variables
+  2. `.env` ข้างไฟล์ (เฉพาะเครื่อง dev, อยู่ใน `.gitignore`)
+  3. `%LOCALAPPDATA%\odoo-counter\config.json` ที่กรอกผ่านปุ่ม 🔑 ในแอป — **เส้นทางปกติของเครื่องไลน์ผลิต**
+  เป็นแบบ all-or-nothing ต่อ source เพื่อไม่ให้เกิด URL ของ test ปนกับ password ของ prod
+  `ODOO_CREDS_SOURCE` เก็บ label ของ source ที่ชนะ และแสดงใน dialog เพื่อกัน "กรอกแล้วไม่เปลี่ยน"
 - `DEFAULT_MODEL = <base_dir>/ai_3g_v12.pt`
 - `DEFAULT_CONF = 0.7`
+
+Odoo credential keys ใน `config.json` (KAN — ย้าย credential ออกจาก source):
+
+- `odoo_url`, `odoo_db`, `odoo_user`, `odoo_password` — เขียนโดย `_save_odoo_config()` แบบ merge
+  (ไม่ทับ key ของ crop/invoice) อ่านโดย `_load_odoo_config()`
+- กรอกผ่าน `OdooSettingsDialog` (ปุ่ม 🔑) ซึ่งแยกจาก `CropSettingsDialog` เพราะตัวนั้นเป็นหน้าดูภาพสด
+  ที่ผูกกับ camera worker — credential ต้องเข้าถึงได้แม้กล้อง/model ไม่ขึ้น
+- กด "ทดสอบการเชื่อมต่อ" จะ `authenticate()` ด้วยค่าที่พิมพ์ในช่อง (ยังไม่บันทึก) จำเป็นเพราะ
+  `OdooStatusWorker` ping แค่ `version()` ซึ่งไม่ auth — รหัสผิดไฟก็ยังเขียว
+- บันทึกแล้วเรียก `_apply_odoo_config()` → `OdooConn.reset()` → `check_now()` จึงไม่ต้อง restart แอป
 
 Base path logic:
 
