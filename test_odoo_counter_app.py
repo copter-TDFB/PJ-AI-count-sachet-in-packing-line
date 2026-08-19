@@ -170,10 +170,15 @@ class BarcodeWorker(QThread):
             pickings = models.execute_kw(
                 ODOO_DB, uid, ODOO_PASSWORD,
                 'stock.picking', 'search_read',
-                [[['x_studio_tracking_no', '=', self.barcode],
+                [[['x_studio_order_reference', '=', self.barcode],
                   ['picking_type_id.name', 'ilike', 'Pack'],
                   ['state', '=', 'assigned']]],
-                {'fields': ['name', 'x_studio_tracking_no', 'partner_id', 'state', 'origin', 'sale_id'], 'limit': 1}
+                # 'order' is explicit: Odoo's default picking order is priority /
+                # scheduled_date first, so on a backorder or split (which share one
+                # Order Reference) the open picking is not necessarily the first row.
+                {'fields': ['name', 'x_studio_tracking_no', 'x_studio_order_reference',
+                            'partner_id', 'state', 'origin', 'sale_id'],
+                 'order': 'id desc', 'limit': 1}
             )
             if not pickings:
                 self.not_found.emit(self.barcode)

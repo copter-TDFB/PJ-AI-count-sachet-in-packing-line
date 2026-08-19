@@ -33,9 +33,13 @@ python batch_eval_app.py
 .\push-userscript.ps1 3.0      # or set the version explicitly
 ```
 
-There is no test suite, linter, or CI. Verification is manual: run from source, run a batch eval on a small dataset, then test the built `launcher.exe`. If you cannot run the app (needs camera/Odoo/internet/credentials), say so explicitly rather than claiming it works.
+There is no linter or CI, and most verification is manual: run from source, run a batch eval on a small dataset, then test the built `launcher.exe`. If you cannot run the app (needs camera/Odoo/internet/credentials), say so explicitly rather than claiming it works.
 
-The one exception is `python test\test_launcher_install.py` — a standalone regression test for the launcher's update swap that needs no camera, Odoo, or network. Run it after touching `launcher.py`.
+A few pieces of logic do have real, runnable tests that need no camera, Odoo, or network:
+- `python test\test_launcher_install.py` — regression test for the launcher's update swap. Run after touching `launcher.py`.
+- `python test\test_thai_baht_text.py` — regression test for `_thai_number_to_text`/`_amount_to_thai_baht_text`. Run after touching Thai baht-text logic.
+- `pytest test_barcode_search.py` — unit tests (fake XML-RPC `RecordingModels`) pinning `BarcodeWorker`'s `stock.picking` lookup to `x_studio_order_reference` with `order='id desc'`. Run after touching the barcode search domain.
+- `pytest test_invoice_posting.py` — unit tests (fake XML-RPC `RecordingModels`) for invoice auto-creation and document-resolution logic. Lives at the project root, not `test/`, matching its module under test — new pytest suites for core app logic can follow the same pattern; `test/` is for standalone/exploratory/demo scripts.
 
 All test and demo scripts (mock/offline logic replicas, exploratory `test_*.py` files, demo copies of the userscript, etc.) live under `test/`, not the project root. Put new ones there too.
 

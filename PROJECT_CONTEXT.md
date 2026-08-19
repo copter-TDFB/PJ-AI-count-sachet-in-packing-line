@@ -13,8 +13,8 @@ Flow ใช้งานจริง:
 1. เปิด `launcher.exe`
 2. launcher เช็ก GitHub Release ล่าสุด ถ้ามี version ใหม่จะ download zip แล้ว replace โฟลเดอร์ `app/`
 3. launcher เปิด `app/odoo_counter.exe`
-4. user สแกน barcode ของใบ pack
-5. app ค้นหา `stock.picking` ใน Odoo จาก `x_studio_tracking_no`
+4. user สแกน **Order Reference** ของใบ pack (เลขออเดอร์ เช่น `S32015` / `MZS-240278` / `585617823717230059` — ไม่ใช่เลข tracking ขนส่ง)
+5. app ค้นหา `stock.picking` ใน Odoo จาก `x_studio_order_reference` (Order Reference — **ไม่ใช่** เลข tracking ของขนส่ง)
 6. app ดึง move lines เฉพาะสินค้า 3g ที่รองรับ + lot/expiration จาก `stock.move.line` / `stock.lot`
 7. popup หน้าต่างกล้องขึ้นมาและเปิด AI inference (inference จะปิดไว้จนกว่า popup จะเปิด เพื่อประหยัด CPU)
 8. AI ตรวจจับ OBB, นับจำนวนตาม class, เทียบกับ demand ใน Odoo
@@ -361,16 +361,36 @@ Step 1: หา picking
 - model: `stock.picking`
 - method: `search_read`
 - domain:
-  - `x_studio_tracking_no = barcode`
+  - `x_studio_order_reference = barcode`
   - `picking_type_id.name ilike Pack`
   - `state = assigned`
 - fields:
   - `name`
-  - `x_studio_tracking_no`
+  - `x_studio_tracking_no` (อ่านมาแสดง/debug เท่านั้น — ไม่ได้ใช้ค้นแล้ว)
+  - `x_studio_order_reference`
   - `partner_id`
   - `state`
   - `origin` (source document ref — ส่งต่อไป Tampermonkey ผ่าน bridge)
-- limit 1
+- `order: 'id desc'`, limit 1
+
+**ทำไมต้องระบุ `order` เอง:** default order ของ `stock.picking` คือ
+`priority desc, scheduled_date asc, id desc` — ไม่ใช่ใบใหม่สุดก่อน. Order Reference
+หนึ่งค่าอาจมี Pack หลายใบ (backorder / แบ่งใบ) ต่างจากเลข tracking ที่เป็น 1:1
+กับใบ. ใบที่ยังไม่แพ็กคือใบใหม่สุด จึงบังคับ `id desc` ไว้ (ใบเดิมที่แพ็กไปแล้วเป็น
+`done` อยู่แล้วและถูก `state = assigned` กรองออก)
+
+**ข้อเท็จจริงจาก production (เช็กเมื่อ 2026-08-19):**
+- `x_studio_order_reference` (label "Order Reference") เป็น **related non-stored field**
+  ที่ mirror `sale_id.display_name` — `search` ได้ปกติ แต่ `read_group` / group by
+  จะ error ที่ server (`Cannot convert sale.order.display_name to SQL because it is
+  not stored`). โค้ดนี้ search เท่านั้นจึงไม่กระทบ
+- ค่าเท่ากับ `origin` ทุกใบใน 400 ใบล่าสุดที่ไม่ใช่ `cancel` (ต่างกัน 0 ใบ) → ค่าที่
+  bridge broadcast ไม่เปลี่ยน, userscript ไม่ต้องแก้/ไม่ต้องบั๊ม `@version`
+- ต่างจาก `x_studio_tracking_no` 366 ใน 400 ใบ (91%) — Shopee ต่างชัด
+  (`JTTH203159462111` vs `585617823717230059`), TikTok ค่าเดียวกันอยู่แล้ว
+- ใบที่ `x_studio_order_reference` ว่าง: 51 จาก 40,526 ใบล่าสุด เป็น `cancel`/`draft`
+  ที่ไม่มี `sale_id` ทั้งหมด → ถูก `state = assigned` กรองออกอยู่แล้ว ไม่มี
+  ออเดอร์ที่เคยยิงได้แล้วพัง
 
 ถ้าไม่เจอ:
 
