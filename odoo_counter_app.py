@@ -22,12 +22,16 @@ from pynput import keyboard as pynput_kb
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QGroupBox, QLineEdit, QFileDialog, QFrame,
-    QScrollArea, QDialog, QSlider, QComboBox, QCheckBox, QFormLayout
+    QScrollArea, QDialog, QSlider, QComboBox, QCheckBox
 )
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen, QFont, QFontMetrics
 from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
 
+ODOO_URL      = 'https://tdfb.odoo.com'
+ODOO_DB       = 'tdfb'
+ODOO_USER     = 'operation.engineer@tdfb.co'
+ODOO_PASSWORD = 'KBT123'
 SHOP_IDENTITY_FIELD = 'x_studio_sender_name'  # sale.order many2one — validated against real data, see KAN-53 spike
 
 def _get_base_dir() -> Path:
@@ -79,117 +83,6 @@ def _load_config_dict() -> dict:
     except Exception as e:
         print(f"[Config] อ่าน {new_path} ไม่สำเร็จ (จะใช้ค่า default): {e}", flush=True)
         return {}
-
-# ── Odoo credentials (per-machine, never in source) ───────────
-# This repo is public, so the credentials live outside it. Resolution order:
-#   1. OS environment variables — CI and one-off overrides
-#   2. .env next to the script — dev machines only, gitignored
-#   3. config.json written by the Odoo settings dialog — the normal path on line machines
-# Case 3 reuses the same %LOCALAPPDATA% file as the crop/invoice settings, so the
-# launcher's app-folder replacement on auto-update never wipes the credentials.
-_ODOO_KEYS = {
-    'ODOO_URL':      'odoo_url',
-    'ODOO_DB':       'odoo_db',
-    'ODOO_USER':     'odoo_user',
-    'ODOO_PASSWORD': 'odoo_password',
-}
-
-ODOO_URL      = ''
-ODOO_DB       = ''
-ODOO_USER     = ''
-ODOO_PASSWORD = ''
-ODOO_CREDS_SOURCE = ''
-
-
-def _load_dotenv_dict() -> dict:
-    """Minimal KEY=VALUE reader for the dev .env. Deliberately not python-dotenv: a new
-    dependency would also need a --hidden-import in build.ps1 for the frozen build."""
-    path = _get_base_dir() / '.env'
-    if not path.exists():
-        return {}
-    out = {}
-    try:
-        for raw in path.read_text(encoding='utf-8').splitlines():
-            line = raw.strip()
-            if not line or line.startswith('#') or '=' not in line:
-                continue
-            key, _, value = line.partition('=')
-            out[key.strip()] = value.strip().strip('"').strip("'")
-    except Exception as e:
-        print(f"[Config] อ่าน {path} ไม่สำเร็จ: {e}", flush=True)
-    return out
-
-
-def _load_odoo_config() -> dict:
-    """Sibling of _load_invoice_config() for the Odoo credentials, plus a 'source' label.
-
-    Resolution is all-or-nothing per source: a source is used only if it supplies all four
-    values. Merging key-by-key would let a half-filled .env pair a test URL with the
-    production password — on a packing line that means posting invoices into the wrong
-    tenant. Credentials are one set, not four independent settings.
-
-    Missing everywhere gives back empty strings rather than raising: the app must still
-    start so the operator can reach the settings dialog, which is exactly the state of every
-    machine right after it auto-updates to the first build that stopped shipping the
-    credentials. Two test modules also import this one at module level."""
-    dotenv = _load_dotenv_dict()
-    stored = _load_config_dict()
-    sources = (
-        ('OS environment',        {ck: os.environ.get(en) for en, ck in _ODOO_KEYS.items()}),
-        ('.env (dev)',            {ck: dotenv.get(en)     for en, ck in _ODOO_KEYS.items()}),
-        ('config.json (เครื่องนี้)', {ck: stored.get(ck)     for en, ck in _ODOO_KEYS.items()}),
-    )
-    for label, values in sources:
-        # Password is left as-is: stripping it here would disagree with _save_odoo_config,
-        # which stores exactly what was typed.
-        out = {
-            key: (value if isinstance(value, str) else '') if key == 'odoo_password'
-                 else (value.strip() if isinstance(value, str) else '')
-            for key, value in values.items()
-        }
-        if all(out.values()):
-            out['source'] = label
-            return out
-    empty = {ck: '' for ck in _ODOO_KEYS.values()}
-    empty['source'] = ''
-    return empty
-
-
-def _save_odoo_config(url: str, db: str, user: str, password: str):
-    """Sibling of _save_invoice_printer() — merge-based so the crop/invoice keys already in
-    config.json survive. Password is stored as typed (no strip) in case of a trailing space."""
-    config_path = _config_path()
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    d = _load_config_dict()
-    d.update({
-        'odoo_url':      url.strip().rstrip('/'),
-        'odoo_db':       db.strip(),
-        'odoo_user':     user.strip(),
-        'odoo_password': password,
-    })
-    config_path.write_text(json.dumps(d, indent=2), encoding='utf-8')
-
-
-def _apply_odoo_config():
-    """Refresh the module-level ODOO_* globals. Keeping them as globals (rather than passing
-    a creds object to all 46 call sites) keeps this change to the loader plus the settings
-    dialog. Callers that also hold a cached connection must reset it themselves —
-    OdooConn is defined further down, so this function cannot do it."""
-    global ODOO_URL, ODOO_DB, ODOO_USER, ODOO_PASSWORD, ODOO_CREDS_SOURCE
-    cfg = _load_odoo_config()
-    ODOO_URL          = cfg['odoo_url'].rstrip('/')
-    ODOO_DB           = cfg['odoo_db']
-    ODOO_USER         = cfg['odoo_user']
-    ODOO_PASSWORD     = cfg['odoo_password']
-    ODOO_CREDS_SOURCE = cfg['source']
-
-
-def _odoo_is_configured() -> bool:
-    return all((ODOO_URL, ODOO_DB, ODOO_USER, ODOO_PASSWORD))
-
-
-_apply_odoo_config()
-
 
 def _load_crop() -> tuple:
     d = _load_config_dict()
@@ -331,11 +224,6 @@ class OdooConn:
 
     @classmethod
     def ensure(cls):
-        # Single choke point for every Odoo call path (barcode, invoice print, save,
-        # preconnect), so an unconfigured machine reports the real reason instead of an
-        # XML-RPC error against an empty URL.
-        if not _odoo_is_configured():
-            raise RuntimeError('ยังไม่ได้ตั้งค่าบัญชี Odoo — กดปุ่ม 🔑 แล้วกรอก URL/DB/User/Password')
         if cls._uid is None:
             with cls._lock:
                 if cls._uid is None:
@@ -919,17 +807,6 @@ class OdooStatusWorker(QThread):
 
     def run(self):
         while self._running:
-            # Every machine lands here right after updating to the build that stopped
-            # shipping credentials. Say so plainly instead of reporting a connection
-            # error against an empty URL.
-            if not _odoo_is_configured():
-                self.status_changed.emit(
-                    'fail', 'ยังไม่ได้ตั้งค่า — กดปุ่ม 🔑 เพื่อกรอกข้อมูลเชื่อมต่อ'
-                )
-                self._wake.wait(self._INTERVAL_S)
-                self._wake.clear()
-                continue
-
             self.status_changed.emit('checking', 'กำลังตรวจสอบ...')
             try:
                 proxy = xmlrpc.client.ServerProxy(
@@ -1402,161 +1279,6 @@ class CropPreviewWidget(QWidget):
         pen.setWidth(2)
         painter.setPen(pen)
         painter.drawRect(rx, ry, rw, rh)
-
-
-class _OdooTestWorker(QThread):
-    """Runs the settings dialog's "ทดสอบการเชื่อมต่อ" button off the UI thread —
-    common.authenticate() is a blocking XML-RPC round trip. Mirrors _TestPrintWorker."""
-    done = pyqtSignal(bool, str)
-
-    def __init__(self, url: str, db: str, user: str, password: str):
-        super().__init__()
-        self._url      = url
-        self._db       = db
-        self._user     = user
-        self._password = password
-
-    def run(self):
-        try:
-            common = xmlrpc.client.ServerProxy(
-                f"{self._url}/xmlrpc/2/common",
-                transport=_PingTransport(timeout=10.0),
-            )
-            uid = common.authenticate(self._db, self._user, self._password, {})
-            if uid:
-                self.done.emit(True, f"เชื่อมต่อสำเร็จ (uid {uid})")
-            else:
-                self.done.emit(False, "Login ไม่ผ่าน — ตรวจ Database / User / Password อีกครั้ง")
-        except Exception as e:
-            err = str(e)
-            if len(err) > 120:
-                err = err[:117] + '...'
-            self.done.emit(False, f"เชื่อมต่อไม่ได้ — {err}")
-
-
-class OdooSettingsDialog(QDialog):
-    """Per-machine Odoo credentials, kept out of the source tree (this repo is public).
-
-    Its own dialog rather than another group box inside CropSettingsDialog, because that
-    one is a live camera view: _open_crop_settings() is gated on the camera worker and
-    streams frames into the preview for as long as it is open. Credentials have to be
-    reachable on a machine whose camera or model never came up, and the first thing every
-    machine needs after the update that stopped shipping credentials is this dialog."""
-
-    def __init__(self, current: dict, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("ตั้งค่าการเชื่อมต่อ Odoo")
-        self.setMinimumWidth(560)
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        self._test_worker: _OdooTestWorker | None = None
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-
-        info = QLabel(
-            "ข้อมูลนี้เก็บไว้เฉพาะเครื่องนี้ ไม่ถูกส่งขึ้น GitHub  •  "
-            "การอัปเดตแอปอัตโนมัติจะไม่ลบค่าที่ตั้งไว้"
-        )
-        info.setStyleSheet("color:#aaa; font-size:12px;")
-        info.setWordWrap(True)
-        layout.addWidget(info)
-
-        # Without this, a leftover .env or an OS env var silently outranks whatever is
-        # typed here and the save looks like it did nothing.
-        source = current.get('source') or 'ยังไม่ได้ตั้งค่า'
-        lbl_source = QLabel(f"ค่าที่ใช้อยู่ตอนนี้มาจาก: {source}")
-        lbl_source.setStyleSheet("color:#90CAF9; font-size:12px;")
-        layout.addWidget(lbl_source)
-
-        form = QFormLayout()
-        form.setSpacing(8)
-        self.ed_url      = QLineEdit(current.get('odoo_url', ''))
-        self.ed_db       = QLineEdit(current.get('odoo_db', ''))
-        self.ed_user     = QLineEdit(current.get('odoo_user', ''))
-        self.ed_password = QLineEdit(current.get('odoo_password', ''))
-        self.ed_url.setPlaceholderText("https://example.odoo.com")
-        self.ed_password.setEchoMode(QLineEdit.EchoMode.Password)
-        for label, widget in (
-            ("URL",      self.ed_url),
-            ("Database", self.ed_db),
-            ("User",     self.ed_user),
-            ("Password", self.ed_password),
-        ):
-            widget.setFixedHeight(32)
-            widget.setStyleSheet("font-size:13px; padding:2px 8px;")
-            widget.textChanged.connect(self._on_field_changed)
-            form.addRow(QLabel(label), widget)
-        layout.addLayout(form)
-
-        self.chk_show = QCheckBox("แสดงรหัสผ่าน")
-        self.chk_show.toggled.connect(self._on_show_password)
-        layout.addWidget(self.chk_show)
-
-        self.lbl_result = QLabel("")
-        self.lbl_result.setWordWrap(True)
-        self.lbl_result.setStyleSheet("font-size:12px; color:#888;")
-        layout.addWidget(self.lbl_result)
-
-        btn_row = QHBoxLayout()
-        self.btn_test = QPushButton("ทดสอบการเชื่อมต่อ")
-        self.btn_test.setFixedHeight(36)
-        self.btn_test.clicked.connect(self._on_test)
-        btn_cancel = QPushButton("ยกเลิก")
-        btn_cancel.setFixedHeight(36)
-        btn_cancel.clicked.connect(self.reject)
-        self.btn_save = QPushButton("บันทึก")
-        self.btn_save.setFixedHeight(36)
-        self.btn_save.setStyleSheet("background:#2E7D32; color:white; font-weight:bold;")
-        self.btn_save.clicked.connect(self.accept)
-        btn_row.addWidget(self.btn_test)
-        btn_row.addStretch(1)
-        btn_row.addWidget(btn_cancel)
-        btn_row.addWidget(self.btn_save)
-        layout.addLayout(btn_row)
-
-        self._on_field_changed()
-
-    def _on_show_password(self, shown: bool):
-        self.ed_password.setEchoMode(
-            QLineEdit.EchoMode.Normal if shown else QLineEdit.EchoMode.Password
-        )
-
-    def _on_field_changed(self):
-        """Both buttons need all four fields — a partial config would just fail at login."""
-        complete = all(v for v in self.get_values().values())
-        self.btn_save.setEnabled(complete)
-        self.btn_test.setEnabled(complete and self._test_worker is None)
-
-    def get_values(self) -> dict:
-        return {
-            'url':      self.ed_url.text().strip().rstrip('/'),
-            'db':       self.ed_db.text().strip(),
-            'user':     self.ed_user.text().strip(),
-            'password': self.ed_password.text(),
-        }
-
-    def _on_test(self):
-        if self._test_worker is not None:
-            return
-        vals = self.get_values()
-        self.lbl_result.setText("กำลังทดสอบ...")
-        self.lbl_result.setStyleSheet("font-size:12px; color:#FFB300;")
-        self.btn_test.setEnabled(False)
-        self._test_worker = _OdooTestWorker(vals['url'], vals['db'], vals['user'], vals['password'])
-        self._test_worker.done.connect(self._on_test_done)
-        self._test_worker.finished.connect(self._on_test_finished)
-        self._test_worker.start()
-
-    def _on_test_done(self, ok: bool, message: str):
-        self.lbl_result.setText(message)
-        self.lbl_result.setStyleSheet(
-            f"font-size:12px; color:{'#4CAF50' if ok else '#EF5350'};"
-        )
-
-    def _on_test_finished(self):
-        self._test_worker = None
-        self._on_field_changed()
 
 
 class CropSettingsDialog(QDialog):
@@ -2578,17 +2300,8 @@ class MainWindow(QMainWindow):
         )
         self.btn_crop_settings.clicked.connect(self._open_crop_settings)
 
-        self.btn_odoo_settings = QPushButton("🔑")
-        self.btn_odoo_settings.setFixedSize(40, 40)
-        self.btn_odoo_settings.setToolTip("ตั้งค่าการเชื่อมต่อ Odoo (URL / DB / User / Password)")
-        self.btn_odoo_settings.setStyleSheet(
-            "font-size:18px; background:#37474F; color:white; border-radius:6px;"
-        )
-        self.btn_odoo_settings.clicked.connect(self._open_odoo_settings)
-
         bc_row.addWidget(self.barcode_input)
         bc_row.addWidget(self.lbl_bc_icon)
-        bc_row.addWidget(self.btn_odoo_settings)
         bc_row.addWidget(self.btn_crop_settings)
         bc_outer.addLayout(bc_row)
 
@@ -2606,29 +2319,6 @@ class MainWindow(QMainWindow):
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_status.setStyleSheet("color:#888; font-size:12px;")
         root.addWidget(self.lbl_status)
-
-    def _open_odoo_settings(self):
-        """Not gated on the camera worker, unlike _open_crop_settings — see
-        OdooSettingsDialog's docstring."""
-        dlg = OdooSettingsDialog(_load_odoo_config(), parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-        vals = dlg.get_values()
-        try:
-            _save_odoo_config(vals['url'], vals['db'], vals['user'], vals['password'])
-        except Exception as e:
-            self.lbl_status.setText(f"บันทึกการตั้งค่า Odoo ล้มเหลว: {e}")
-            return
-        _apply_odoo_config()
-        OdooConn.reset()   # drop the uid/models cached against the old credentials
-        if ODOO_CREDS_SOURCE.startswith('config.json'):
-            self.lbl_status.setText("บันทึกการตั้งค่า Odoo แล้ว — กำลังเชื่อมต่อใหม่")
-        else:
-            # Dev machines only: an OS env var or .env outranks config.json by design.
-            self.lbl_status.setText(
-                f"บันทึกลง config.json แล้ว แต่ค่าที่ใช้จริงมาจาก {ODOO_CREDS_SOURCE}"
-            )
-        self._odoo_status_worker.check_now()
 
     def _open_crop_settings(self):
         if not self._camera_worker:

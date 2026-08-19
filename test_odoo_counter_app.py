@@ -24,47 +24,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QTimer, QRect
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QColor, QPen
 
-# ── Test-tenant credentials ───────────────────────────────────
-# Never in source: this repo is public. Read from OS env vars or a gitignored .env only —
-# deliberately NOT from %LOCALAPPDATA%\odoo-counter\config.json, so this clone can never
-# pick up a production machine's credentials and write into the live tenant.
-# This file is a dev tool run from a console, so failing fast is right here, unlike the
-# production app which has to start and let the operator fill the settings dialog in.
-_ODOO_TEST_KEYS = ('ODOO_TEST_URL', 'ODOO_TEST_DB', 'ODOO_TEST_USER', 'ODOO_TEST_PASSWORD')
-
-
-def _read_env_file() -> dict:
-    path = Path(__file__).parent / '.env'
-    if not path.exists():
-        return {}
-    out = {}
-    try:
-        for raw in path.read_text(encoding='utf-8').splitlines():
-            line = raw.strip()
-            if not line or line.startswith('#') or '=' not in line:
-                continue
-            key, _, value = line.partition('=')
-            out[key.strip()] = value.strip().strip('"').strip("'")
-    except Exception as e:
-        print(f"[Config] อ่าน {path} ไม่สำเร็จ: {e}", flush=True)
-    return out
-
-
-def _require_test_creds() -> tuple:
-    dotenv = _read_env_file()
-    values = [(os.environ.get(k) or dotenv.get(k) or '').strip() for k in _ODOO_TEST_KEYS]
-    missing = [k for k, v in zip(_ODOO_TEST_KEYS, values) if not v]
-    if missing:
-        print(
-            "ไม่พบ credential ของ test tenant: " + ', '.join(missing) + "\n"
-            "ตั้งเป็น environment variable หรือใส่ในไฟล์ .env ข้างไฟล์นี้ (ไม่ถูก commit)",
-            flush=True,
-        )
-        sys.exit(2)
-    return tuple(values)
-
-
-ODOO_URL, ODOO_DB, ODOO_USER, ODOO_PASSWORD = _require_test_creds()
+ODOO_URL      = 'https://tdfb-10072026-test-v2.odoo.com'
+ODOO_DB       = 'tdfb-10072026-test-v2'
+ODOO_USER     = 'operation.engineer@tdfb.co'
+ODOO_PASSWORD = 'KBT123'
 
 # ── Invoice auto-print demo (KAN-70) — gate + report matching planned KAN-47 ──
 INVOICE_NEED_BILL_VALUE = 'ปริ้นใบเสร็จ'

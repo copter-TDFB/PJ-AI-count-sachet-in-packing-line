@@ -32,15 +32,3 @@ manual-html-preview.png
 .worktrees/
 .codex/
 .opencode/
-
-# Odoo credentials — per-machine, never committed. This repo is public: the app reads
-# them from OS env vars, this .env (dev only), or the in-app settings dialog.
-.env
-.env.*
-
-# superpowers subagent scratch (review diffs contain whatever the diff touched).
-# Only a nested .gitignore protected this before — belt and braces.
-.superpowers/
-
-# .env.example is a committed template with no real values
-!.env.example
